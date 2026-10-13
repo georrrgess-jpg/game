@@ -3,6 +3,8 @@ import { Db } from "../../server/db";
 import { Repo, type EventRecord, type QuoteRecord } from "../../server/repo";
 import { fitLogistic, fitModel, predictWithInterval, runElo, ratingsAt, type GameRow } from "../../server/model";
 import { analyzeEvent, buildMarket, ModelService, type AnalysisContext } from "../../server/analysis";
+import { DEFAULT_MARKET_CONFIG } from "../../server/market";
+import { devig } from "../../shared/betting";
 import { buildBoard } from "../../server/board";
 import { generateDemoWorld, demoSnapshotTimes } from "../../server/demo";
 import { mulberry32 } from "../../shared/rng";
@@ -100,9 +102,16 @@ describe("market construction", () => {
     const status = Object.fromEntries(m.books.map((b) => [b.book_key, b.status]));
     expect(status).toEqual({ a: "current", b: "current", stale: "stale", half: "incomplete", skew: "mismatched_times" });
     expect(m.reference!.nBooks).toBe(2);
-    const pa = (1 / 1.8) / (1 / 1.8 + 1 / 2.1);
-    const pb = (1 / 1.9) / (1 / 1.9 + 1 / 2.0);
+    // Default margin removal is Shin's method, applied to each book's own set, then the median.
+    const pa = devig([1.8, 2.1], "shin")[0];
+    const pb = devig([1.9, 2.0], "shin")[0];
     expect(m.reference!.probs.home).toBeCloseTo((pa + pb) / 2, 10);
+    expect(m.reference!.devig).toBe("shin");
+    // Proportional removal is still available explicitly.
+    const mp = buildMarket(quotes, "moneyline_2way_full_game", null, ev, asOf, 60, { ...DEFAULT_MARKET_CONFIG, method: "proportional" });
+    const qa = (1 / 1.8) / (1 / 1.8 + 1 / 2.1);
+    const qb = (1 / 1.9) / (1 / 1.9 + 1 / 2.0);
+    expect(mp.reference!.probs.home).toBeCloseTo((qa + qb) / 2, 10);
     expect(m.reference!.probs.home! + m.reference!.probs.away!).toBeCloseTo(1, 12);
     // Highest price: incomplete book's quote is still a real quote; stale one is excluded.
     expect(m.bestPrice.home!.book_key).toBe("half");
@@ -176,8 +185,10 @@ describe("demo world analysis (leakage, replay, determinism)", () => {
     expect(b.items.every((i) => i.fictional)).toBe(true);
     expect(b.items.some((i) => i.voided)).toBe(true);
     expect(b.coverage.withModel).toBe(b.items.length);
+    expect(new Set(b.items.map((i) => i.sport))).toEqual(new Set(["demo_baseball", "demo_basketball", "demo_football", "demo_tennis"]));
     for (const i of b.items) {
-      expect(i.asOf).toBe("2026-06-16T15:00:00Z");
+      // Games that already started are analysed with information frozen at their start.
+      expect(i.asOf).toBe(i.start < "2026-06-16T15:00:00Z" ? i.start : "2026-06-16T15:00:00Z");
       expect(i.uncertainty.length).toBeGreaterThan(20);
       expect(i.completeness.applicable).toBeGreaterThan(0);
     }
@@ -186,7 +197,7 @@ describe("demo world analysis (leakage, replay, determinism)", () => {
   it("information after the as-of time cannot change an analysis (no leakage)", () => {
     const asOf = "2026-06-16T15:00:00Z";
     const b = buildBoard({ repo, models }, ctx(asOf), "2026-06-16");
-    const target = b.items.find((i) => !i.voided)!;
+    const target = b.items.find((i) => !i.voided && i.sport === "demo_baseball" && i.start > asOf)!;
     const before = JSON.stringify(analyzeEvent({ repo, models }, ctx(asOf), target.eventId));
     // Inject future information: a later quote, injury, news item and a result for another game.
     repo.insertQuotes([
@@ -207,7 +218,11 @@ describe("demo world analysis (leakage, replay, determinism)", () => {
     const a1 = buildBoard({ repo, models }, ctx(asOf), "2026-05-12");
     const a2 = buildBoard({ repo, models }, ctx(asOf), "2026-05-12");
     expect(JSON.stringify(a1.items)).toEqual(JSON.stringify(a2.items));
-    expect(a1.items.every((i) => !i.resultKnown && i.score === null)).toBe(true);
+    const upcoming = a1.items.filter((i) => i.start > asOf);
+    expect(upcoming.length).toBeGreaterThan(4);
+    expect(upcoming.every((i) => !i.resultKnown && i.score === null)).toBe(true);
+    // A match that finished before the information time may show its result; one still running may not.
+    expect(a1.items.filter((i) => i.resultKnown).every((i) => repo.event(i.eventId)!.final_at! <= asOf)).toBe(true);
     const next = buildBoard({ repo, models }, ctx("2026-05-13T15:00:00Z"), "2026-05-12");
     expect(next.items.filter((i) => !i.voided).every((i) => i.resultKnown)).toBe(true);
   });
@@ -285,7 +300,7 @@ describe("demo world analysis (leakage, replay, determinism)", () => {
 
   it("what-if: neutral site changes only the home-advantage input", () => {
     const b = buildBoard({ repo, models }, ctx("2026-06-16T15:00:00Z"), "2026-06-16");
-    const id = b.items.find((i) => !i.voided)!.eventId;
+    const id = b.items.find((i) => !i.voided && i.sport === "demo_baseball")!.eventId;
     const base = analyzeEvent({ repo, models }, ctx("2026-06-16T15:00:00Z"), id)!;
     const neutral = analyzeEvent({ repo, models }, ctx("2026-06-16T15:00:00Z"), id, { neutral: true })!;
     const hb = base.model.prediction!.features.find((f) => f.name === "home_advantage")!;

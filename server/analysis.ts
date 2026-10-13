@@ -2,24 +2,39 @@
 // combined estimate, discrepancy verdicts, data completeness, evidence and a
 // deterministic plain-language explanation. All numbers come from code, not prose.
 
-import { CONTRACTS, contractId, sportFamily, weatherRelevant, type ContractKey, type OutcomeKey } from "../shared/contracts";
-import {
-  breakEvenProbability,
-  consensusFromBooks,
-  decimalToAmerican,
-  expectedNetPoints,
-  formatPct,
-  formatPctPoints,
-  impliedProbability,
-  logit,
-  proportionalNoVig,
-  sigmoid,
-} from "../shared/odds";
+import { CONTRACTS, modelSupportedSport, primaryContract, seasonOf, sportFamily, tennisBestOfFromKey, weatherRelevant, type ContractKey, type OutcomeKey } from "../shared/contracts";
+import { breakEvenProbability, expectedNetPoints, expectedNetPointsWithPush, formatPct, formatPctPoints, logit, sigmoid } from "../shared/odds";
 import { minutesBetween, toUtcIso } from "../shared/time";
 import type { Dataset, EventRecord, InjuryRecord, LineupRecord, NewsRecord, QuoteRecord, Repo, WeatherRecord } from "./repo";
 import { eventAsOf } from "./repo";
 import { json } from "./db";
-import { fitModel, linearPredictor, predictGame, ratingsAt, restDiffFor, runElo, type FitResult, type ModelFit, type ModelPrediction, type EloState } from "./model";
+import {
+  fitModel,
+  linearPredictor,
+  predictGame,
+  ratingsAt,
+  runElo,
+  blendedCover,
+  discreteDistribution,
+  lineProbabilities,
+  MARGIN_RANGE,
+  TOTAL_RANGE,
+  scheduleFeatures,
+  sportConfig,
+  spreadProbabilities,
+  totalProbabilities,
+  type EloState,
+  type FitResult,
+  type ModelFit,
+  type ModelPrediction,
+} from "./model";
+import { buildMarket, linesOffered, MarketService, methodLabel, type MarketView } from "./market";
+
+export { buildMarket, primaryContract };
+export type { BookQuoteView, MarketView } from "./market";
+
+/** Sports with an independent model. Kept as a set-like helper for callers. */
+export const MODEL_SPORTS = { has: (sportKey: string) => modelSupportedSport(sportKey) };
 import { logLoss, pairedBootstrapCI } from "../shared/evaluation";
 import { detectConflicts, type Conflict } from "./news";
 
@@ -32,7 +47,6 @@ export interface AnalysisContext {
   mode: "demo" | "replay" | "live";
 }
 
-export const MODEL_SPORTS = new Set(["demo_baseball", "baseball_mlb"]);
 export const HOLDOUT_MIN_GAMES = 200;
 
 export interface MarketTrackRecord {
@@ -40,197 +54,57 @@ export interface MarketTrackRecord {
   n: number;
   ci: { mean: number; low: number; high: number } | null;
 }
-const COMPARABLE_MINUTES = 5;
-
-export function primaryContract(sportKey: string): ContractKey {
-  return sportFamily(sportKey) === "soccer" ? "moneyline_3way_regulation" : "moneyline_2way_full_game";
-}
-
-// ---------------- market ----------------
-export interface BookQuoteView {
-  book_key: string;
-  book_title: string;
-  outcomes: Partial<Record<OutcomeKey, { decimal: number; american: number; rawImplied: number; source_time: string; retrieved_at: string; known_at: string }>>;
-  complete: boolean;
-  comparable: boolean;
-  fresh: boolean;
-  status: "current" | "stale" | "incomplete" | "after_start" | "mismatched_times";
-  newestSource: string | null;
-  lastConfirmed: string | null;
-  ageMinutes: number | null;
-  overround: number | null;
-  noVig: Partial<Record<OutcomeKey, number>> | null;
-}
-
-export interface MarketView {
-  contract: ContractKey;
-  contractId: string;
-  line: number | null;
-  label: string;
-  outcomes: OutcomeKey[];
-  books: BookQuoteView[];
-  reference: {
-    probs: Partial<Record<OutcomeKey, number>>;
-    nBooks: number;
-    range: Partial<Record<OutcomeKey, [number, number]>>;
-    method: string;
-  } | null;
-  referenceUnavailableReason: string | null;
-  bestPrice: Partial<Record<OutcomeKey, { decimal: number; american: number; book_title: string; book_key: string; source_time: string; retrieved_at: string; label: string }>>;
-}
-
-export function buildMarket(
-  quotes: QuoteRecord[],
-  contract: ContractKey,
-  line: number | null,
-  event: { start_time: string },
-  asOf: string,
-  staleMinutes: number,
-): MarketView {
-  const spec = CONTRACTS[contract];
-  const cid = contractId(contract, line);
-  const mine = quotes.filter((q) => q.contract_id === cid);
-  const byBook = new Map<string, QuoteRecord[]>();
-  for (const q of mine) byBook.set(q.book_key, [...(byBook.get(q.book_key) ?? []), q]);
-  const books: BookQuoteView[] = [];
-  for (const [book_key, qs] of byBook) {
-    const outcomes: BookQuoteView["outcomes"] = {};
-    for (const q of qs) {
-      if (!spec.outcomes.includes(q.outcome)) continue;
-      outcomes[q.outcome] = {
-        decimal: q.price_decimal,
-        american: decimalToAmerican(q.price_decimal),
-        rawImplied: impliedProbability(q.price_decimal),
-        source_time: q.source_time,
-        retrieved_at: q.retrieved_at,
-        known_at: q.known_at,
-      };
-    }
-    const present = spec.outcomes.filter((o) => outcomes[o]);
-    const complete = present.length === spec.outcomes.length;
-    const times = present.map((o) => outcomes[o]!.source_time).sort();
-    const newest = times[times.length - 1] ?? null;
-    const comparable = complete && minutesBetween(times[0], newest!) <= COMPARABLE_MINUTES;
-    // Freshness = time since the quote was last confirmed by a retrieval (a price can stay unchanged
-    // for hours and still be current). The source time shows when the book last changed it.
-    // known_at is the information time (equal to the retrieval time for live polling, and to the snapshot
-    // time for imported historical snapshots), so replays measure freshness correctly.
-    const retrievals = present.map((o) => outcomes[o]!.known_at).sort();
-    const oldestConfirmation = retrievals[0] ?? null;
-    const ageMinutes = oldestConfirmation ? minutesBetween(oldestConfirmation, asOf) : null;
-    const afterStart = newest != null && newest >= event.start_time;
-    const fresh = !afterStart && ageMinutes != null && ageMinutes >= 0 && ageMinutes <= staleMinutes;
-    let overround: number | null = null;
-    let noVig: BookQuoteView["noVig"] = null;
-    if (complete && comparable) {
-      const ds = spec.outcomes.map((o) => outcomes[o]!.decimal);
-      overround = ds.reduce((s, d) => s + 1 / d, 0) - 1;
-      const p = proportionalNoVig(ds);
-      noVig = Object.fromEntries(spec.outcomes.map((o, i) => [o, p[i]]));
-    }
-    books.push({
-      book_key,
-      book_title: qs[0].book_title,
-      outcomes,
-      complete,
-      comparable,
-      fresh,
-      status: afterStart ? "after_start" : !complete ? "incomplete" : !comparable ? "mismatched_times" : fresh ? "current" : "stale",
-      newestSource: newest,
-      lastConfirmed: retrievals[retrievals.length - 1] ?? null,
-      ageMinutes,
-      overround,
-      noVig,
-    });
-  }
-  books.sort((a, b) => a.book_title.localeCompare(b.book_title));
-
-  const eligible = books.filter((b) => b.status === "current" && b.noVig);
-  let reference: MarketView["reference"] = null;
-  let reason: string | null = null;
-  if (eligible.length) {
-    const rows = eligible.map((b) => spec.outcomes.map((o) => b.noVig![o]!));
-    const c = consensusFromBooks(rows);
-    const range: Partial<Record<OutcomeKey, [number, number]>> = {};
-    spec.outcomes.forEach((o, i) => {
-      const vals = rows.map((r) => r[i]);
-      range[o] = [Math.min(...vals), Math.max(...vals)];
-    });
-    reference = {
-      probs: Object.fromEntries(spec.outcomes.map((o, i) => [o, c[i]])),
-      nBooks: eligible.length,
-      range,
-      method:
-        eligible.length === 1
-          ? "One book's complete outcome set with its margin removed proportionally (p = q / sum q)."
-          : `Median across ${eligible.length} books of each book's own margin-adjusted probabilities (p = q / sum q per book), renormalised. Prices from different books are never mixed into one set.`,
-    };
-  } else if (!books.length) {
-    reason = "No quotes from connected sources for this contract.";
-  } else if (books.some((b) => b.status === "stale")) {
-    reason = `Only stale quotes (older than ${staleMinutes} min) are available, so no current market reference is shown.`;
-  } else if (books.every((b) => b.status === "after_start")) {
-    reason = "Quotes after the scheduled start are excluded (pre-game analysis only).";
-  } else {
-    reason = "No book offers a complete, same-time set of outcomes.";
-  }
-
-  const bestPrice: MarketView["bestPrice"] = {};
-  for (const o of spec.outcomes) {
-    let best: (typeof bestPrice)[OutcomeKey] | undefined;
-    for (const b of books) {
-      const q = b.outcomes[o];
-      if (!q || b.status === "after_start") continue;
-      const age = minutesBetween(q.known_at, asOf);
-      if (age > staleMinutes || age < 0) continue;
-      if (!best || q.decimal > best.decimal) {
-        best = {
-          decimal: q.decimal,
-          american: q.american,
-          book_title: b.book_title,
-          book_key: b.book_key,
-          source_time: q.source_time,
-          retrieved_at: q.known_at,
-          label: `Highest quoted price among connected sources as of ${asOf}`,
-        };
-      }
-    }
-    if (best) bestPrice[o] = best;
-  }
-  return { contract, contractId: cid, line, label: spec.label, outcomes: spec.outcomes, books, reference, referenceUnavailableReason: reason, bestPrice };
-}
-
 // ---------------- model service ----------------
+interface EventExtra {
+  surface?: string | null;
+  bestOf?: number | null;
+}
+export function eventExtra(e: Pick<EventRecord, "extra" | "sport_key">): EventExtra {
+  const x = json<EventExtra>(e.extra, {});
+  if (sportFamily(e.sport_key) === "tennis" && x.bestOf == null) x.bestOf = tennisBestOfFromKey(e.sport_key);
+  return x;
+}
+
 export class ModelService {
   private fits = new Map<string, FitResult>();
   private states = new Map<string, EloState>();
+  readonly markets: MarketService;
   constructor(
     private repo: Repo,
     private staleMinutes: () => number,
-  ) {}
+  ) {
+    this.markets = new MarketService(repo, staleMinutes);
+  }
 
-  forecastSeason(e: Pick<EventRecord, "season" | "start_time">): string {
-    return e.season ?? e.start_time.slice(0, 4);
+  forecastSeason(e: Pick<EventRecord, "season" | "start_time" | "sport_key">): string {
+    return e.season ?? seasonOf(e.sport_key, e.start_time);
   }
 
   /** Pre-game market home probability 60 minutes before the start, from quotes known then. */
-  marketHomeAt(eventId: string, startIso: string): number | null {
-    const t = new Date(Date.parse(startIso) - 60 * 60000).toISOString().replace(/\.\d{3}Z$/, "Z");
-    const quotes = this.repo.latestQuotes(eventId, t);
-    if (!quotes.length) return null;
-    const m = buildMarket(quotes, "moneyline_2way_full_game", null, { start_time: startIso }, t, this.staleMinutes());
-    return m.reference?.probs.home ?? null;
+  marketHomeAt(eventId: string, _startIso?: string): number | null {
+    return this.markets.homeProbAt(eventId);
+  }
+
+  /** Most-quoted line 60 minutes before the start and the market's no-push probability for its first outcome. */
+  marketLineAt(eventId: string, contract: "spread_full_game" | "total_full_game"): { line: number; pFirst: number } | null {
+    const e = this.repo.event(eventId);
+    if (!e) return null;
+    const main = linesOffered(this.markets.snapshot(e.id, e.start_time, 60).quotes, contract)[0];
+    if (!main) return null;
+    const m = this.markets.referenceAt(e, contract, main.line);
+    const p = m?.reference?.probs[contract === "spread_full_game" ? "home" : "over"];
+    return p == null ? null : { line: main.line, pFirst: p };
   }
 
   fit(dataset: Dataset, sportKey: string, forecastSeason: string, asOf: string): FitResult {
-    if (!MODEL_SPORTS.has(sportKey)) return { available: false, reason: "No validated independent model is implemented for this sport; only the market reference is shown." };
-    const games = this.repo.finalsBefore(dataset, sportKey, asOf).filter((g) => (g.season ?? g.start_time.slice(0, 4)) < forecastSeason);
+    if (!modelSupportedSport(sportKey)) return { available: false, reason: "No validated independent model is implemented for this sport; only the market reference is shown." };
+    const games = this.repo.finalsBefore(dataset, sportKey, asOf).filter((g) => (g.season ?? seasonOf(sportKey, g.start_time)) < forecastSeason);
     const key = `${dataset}|${sportKey}|${forecastSeason}|${games.length}|${games[games.length - 1]?.id ?? ""}`;
     const cached = this.fits.get(key);
     if (cached) return cached;
     const first = games[0]?.start_time ?? asOf;
     const schedule = this.repo.scheduleFor(dataset, sportKey, first, asOf);
-    const fit = fitModel({ sportKey, games, schedule, forecastSeason, marketHome: (id, start) => this.marketHomeAt(id, start) });
+    const fit = fitModel({ sportKey, games, schedule, forecastSeason, marketHome: (id) => this.marketHomeAt(id), marketLine: (id, c) => this.marketLineAt(id, c) });
     if (this.fits.size > 50) this.fits.clear();
     this.fits.set(key, fit);
     return fit;
@@ -241,7 +115,7 @@ export class ModelService {
     const key = `${dataset}|${sportKey}|${fit.version}|${asOf}|${games.length}`;
     const cached = this.states.get(key);
     if (cached) return cached;
-    const st = ratingsAt(games, fit.params, fit.forecastSeason);
+    const st = ratingsAt(games, fit.params, fit.forecastSeason, sportKey);
     if (this.states.size > 200) this.states.clear();
     this.states.set(key, st);
     return st;
@@ -260,12 +134,12 @@ export class ModelService {
     const cached = this.records.get(key);
     if (cached) return cached;
     const schedule = this.repo.scheduleFor(dataset, sportKey, finals[0]?.start_time ?? asOf, asOf);
-    const { rows } = runElo(finals, fit.params, schedule);
+    const { rows } = runElo(finals, fit.params, schedule, sportConfig(sportKey));
     const llModel: number[] = [];
     const llMarket: number[] = [];
     for (const r of rows) {
       if (r.season !== fit.forecastSeason) continue;
-      const pk = this.marketHomeAt(r.id, r.start_time);
+      const pk = this.marketHomeAt(r.id);
       if (pk == null || pk <= 0 || pk >= 1) continue;
       llModel.push(logLoss(sigmoid(linearPredictor(fit.beta, r.x)), r.y));
       llMarket.push(logLoss(pk, r.y));
@@ -286,23 +160,32 @@ export class ModelService {
     ctx: { dataset: Dataset; asOf: string },
     e: EventRecord,
     overrides: { neutral?: boolean; restDiff?: number; ratingAdjust?: { home: number; away: number } } = {},
-  ): { fit: FitResult; prediction: ModelPrediction | null; restDiff: number | null } {
+  ): { fit: FitResult; prediction: ModelPrediction | null; restDiff: number | null; b2bDiff: number | null } {
     const season = this.forecastSeason(e);
     const fit = this.fit(ctx.dataset, e.sport_key, season, ctx.asOf);
-    if (!fit.available) return { fit, prediction: null, restDiff: null };
+    if (!fit.available) return { fit, prediction: null, restDiff: null, b2bDiff: null };
     const st = this.state(ctx.dataset, e.sport_key, fit, ctx.asOf);
     const from = toUtcIso(Date.parse(e.start_time) - 20 * 86400000);
     const schedule = this.repo.scheduleFor(ctx.dataset, e.sport_key, from, e.start_time);
-    const restDiff = overrides.restDiff ?? restDiffFor(schedule, e.home_id, e.away_id, e.start_time);
+    const sf = scheduleFeatures(schedule, e.home_id, e.away_id, e.start_time);
+    const restDiff = overrides.restDiff ?? sf.restDiff;
     let state = st;
     if (overrides.ratingAdjust && (overrides.ratingAdjust.home || overrides.ratingAdjust.away)) {
       const ratings = new Map(st.ratings);
       ratings.set(e.home_id, (ratings.get(e.home_id) ?? 1500) + overrides.ratingAdjust.home);
       ratings.set(e.away_id, (ratings.get(e.away_id) ?? 1500) + overrides.ratingAdjust.away);
-      state = { ...st, ratings };
+      // Surface ratings move with the overall rating so a what-if applies on every surface.
+      const surface = new Map(st.surface);
+      for (const [k, v] of surface) {
+        if (k.startsWith(`${e.home_id}|`)) surface.set(k, v + overrides.ratingAdjust.home);
+        if (k.startsWith(`${e.away_id}|`)) surface.set(k, v + overrides.ratingAdjust.away);
+      }
+      state = { ...st, ratings, surface };
     }
     const neutral = overrides.neutral ?? !!e.neutral_site;
-    return { fit, prediction: predictGame(fit, state, e.home_id, e.away_id, neutral, restDiff), restDiff };
+    const x = eventExtra(e);
+    const prediction = predictGame(fit, state, e.home_id, e.away_id, { neutral, restDiff, b2bDiff: sf.b2bDiff, bestOf: x.bestOf ?? undefined, surface: x.surface ?? null });
+    return { fit, prediction, restDiff, b2bDiff: sf.b2bDiff };
   }
 }
 
@@ -337,6 +220,10 @@ export interface GameAnalysis {
   contract: ContractKey;
   market: MarketView;
   otherMarkets: MarketView[];
+  /** How the market reference was built for this sport (learned on earlier seasons, or defaults). */
+  marketConfig: { method: string; methodKey: string; weighted: boolean; source: "default" | "fitted"; season: string | null; note: string };
+  /** Spread and total lines with model probabilities (including pushes) where the sport has a margin model. */
+  lines: LineAnalysis[];
   model: {
     available: boolean;
     reason: string | null;
@@ -369,6 +256,34 @@ export interface GameAnalysis {
   status: { started: boolean; resultKnown: boolean; voided: boolean };
 }
 
+export interface LineSide {
+  /** Model probability of winning, pushing (stake returned) and losing at this line. */
+  model: { win: number; push: number; loss: number } | null;
+  /** Market no-vig probability of winning given no push (prices settle pushes as refunds). */
+  market: number | null;
+  best: { decimal: number; american: number; book: string } | null;
+  /** Model expected net points per 1 point staked at the best price (pushes return the stake). */
+  ev: number | null;
+  /** Sharpened estimate: model and market-implied means blended with weights chosen on the validation season. */
+  combined: { win: number; push: number; loss: number } | null;
+  combinedEv: number | null;
+  breakEven: number | null;
+}
+
+export interface LineAnalysis {
+  contract: "spread_full_game" | "total_full_game";
+  line: number;
+  booksQuoting: number;
+  isMainLine: boolean;
+  market: MarketView;
+  sides: Partial<Record<OutcomeKey, LineSide>>;
+  /** Model's expected home margin (spreads) or expected total points (totals). */
+  modelExpected: number | null;
+  /** Blended expected margin/total and the model's weight in it (null when no validated blend exists). */
+  combinedExpected: number | null;
+  combinedWeight: number | null;
+}
+
 export interface AnalysisDeps {
   repo: Repo;
   models: ModelService;
@@ -388,20 +303,33 @@ export function analyzeEvent(deps: AnalysisDeps, ctx: AnalysisContext, eventId: 
   const awayName = away?.name ?? e.away_id;
   const contract = primaryContract(e.sport_key);
   const spec = CONTRACTS[contract];
+  const fam = sportFamily(e.sport_key);
   const quotes = deps.repo.latestQuotes(e.id, infoAsOf);
-  const market = buildMarket(quotes, contract, null, e, infoAsOf, ctx.staleMinutes);
+  const mcfg = deps.models.markets.configForEvent(raw, contract, infoAsOf);
+  const market = buildMarket(quotes, contract, null, e, infoAsOf, ctx.staleMinutes, mcfg);
   const otherIds = [...new Set(quotes.filter((q) => q.contract !== contract).map((q) => `${q.contract}|${q.line ?? ""}`))];
   const otherMarkets = otherIds.map((k) => {
     const [c, l] = k.split("|");
-    return buildMarket(quotes, c as ContractKey, l === "" ? null : Number(l), e, infoAsOf, ctx.staleMinutes);
+    return buildMarket(quotes, c as ContractKey, l === "" ? null : Number(l), e, infoAsOf, ctx.staleMinutes, mcfg);
   });
+  const marketConfig: GameAnalysis["marketConfig"] = {
+    method: methodLabel(mcfg.method),
+    methodKey: mcfg.method,
+    weighted: Object.keys(mcfg.weights).length > 0,
+    source: mcfg.source,
+    season: mcfg.calibration?.season ?? null,
+    note:
+      mcfg.source === "fitted"
+        ? `Margin removal method and book weights were chosen on the ${mcfg.calibration!.season} season (${mcfg.calibration!.games} games) and are applied unchanged to later games.`
+        : "Not enough earlier-season results with quotes to learn the market settings, so defaults are used (Shin margin removal, books weighted equally).",
+  };
 
   // ---- model ----
   let model: GameAnalysis["model"] = {
     available: false, reason: null, version: null, probs: null, interval80: null, prediction: null, restDiff: null, trainedThrough: null, validation: null, notes: [],
   };
   let fitAvail: ModelFit | null = null;
-  if (contract === "moneyline_2way_full_game" && MODEL_SPORTS.has(e.sport_key)) {
+  if (contract === "moneyline_2way_full_game" && modelSupportedSport(e.sport_key)) {
     const r = deps.models.predict(infoCtx, raw, whatIf);
     if (r.fit.available && r.prediction) {
       fitAvail = r.fit;
@@ -426,6 +354,67 @@ export function analyzeEvent(deps: AnalysisDeps, ctx: AnalysisContext, eventId: 
       contract === "moneyline_3way_regulation"
         ? "No independent 3-way (draw-aware) model is implemented. Only the market reference is shown."
         : "No validated independent model is implemented for this sport. Only the market reference is shown.";
+  }
+
+  // ---- spreads and totals ----
+  const lines: LineAnalysis[] = [];
+  for (const lc of ["spread_full_game", "total_full_game"] as const) {
+    const offered = linesOffered(quotes, lc);
+    offered.forEach(({ line, books }, idx) => {
+      const m = otherMarkets.find((x) => x.contract === lc && x.line === line);
+      if (!m) return;
+      const pred = model.prediction;
+      const probs =
+        fitAvail && pred
+          ? lc === "spread_full_game"
+            ? spreadProbabilities(fitAvail, pred, line)
+            : (() => {
+                const t = totalProbabilities(fitAvail!, pred, line);
+                return t ? { over: t.over, under: t.under } : null;
+              })()
+          : null;
+      // Sharpened estimate: blend the model's mean with the mean implied by the market's price for this line.
+      const blend = fitAvail?.lineBlend[lc === "spread_full_game" ? "spread" : "total"] ?? null;
+      const dm = lc === "spread_full_game" ? fitAvail?.margin : fitAvail?.total;
+      const muModel = lc === "spread_full_game" ? pred?.expectedMargin : pred?.expectedTotal;
+      const first = m.outcomes[0];
+      let combinedMu: number | null = null;
+      let combinedProbs: Record<string, { win: number; push: number; loss: number }> | null = null;
+      if (blend && dm && muModel != null && m.reference?.probs[first] != null) {
+        combinedMu = blendedCover(dm, lc, line, muModel, m.reference.probs[first]!, blend.w).mu;
+        const dist = discreteDistribution(combinedMu, dm, lc === "spread_full_game" ? MARGIN_RANGE : TOTAL_RANGE);
+        const signed = lc === "spread_full_game" ? line : -line;
+        const plus = lineProbabilities(dist, signed, "plus");
+        const minus = lineProbabilities(dist, signed, "minus");
+        combinedProbs = lc === "spread_full_game" ? { home: plus, away: minus } : { over: plus, under: minus };
+      }
+      const sides: LineAnalysis["sides"] = {};
+      for (const o of m.outcomes) {
+        const mp = (probs as Record<string, { win: number; push: number; loss: number }> | null)?.[o] ?? null;
+        const cp = combinedProbs?.[o] ?? null;
+        const bp = m.bestPrice[o];
+        sides[o] = {
+          model: mp,
+          market: m.reference?.probs[o] ?? null,
+          best: bp ? { decimal: bp.decimal, american: bp.american, book: bp.book_title } : null,
+          ev: mp && bp ? expectedNetPointsWithPush(mp.win, mp.loss, mp.push, bp.decimal) : null,
+          combined: cp,
+          combinedEv: cp && bp ? expectedNetPointsWithPush(cp.win, cp.loss, cp.push, bp.decimal) : null,
+          breakEven: bp ? breakEvenProbability(bp.decimal) : null,
+        };
+      }
+      lines.push({
+        contract: lc,
+        line,
+        booksQuoting: books,
+        isMainLine: idx === 0,
+        market: m,
+        sides,
+        modelExpected: lc === "spread_full_game" ? pred?.expectedMargin ?? null : pred?.expectedTotal ?? null,
+        combinedExpected: combinedMu,
+        combinedWeight: combinedMu != null ? blend!.w : null,
+      });
+    });
   }
 
   // ---- combined ----
@@ -558,17 +547,21 @@ export function analyzeEvent(deps: AnalysisDeps, ctx: AnalysisContext, eventId: 
   items.push({
     key: "model",
     label: "Independent model",
-    status: model.available ? "ok" : MODEL_SPORTS.has(e.sport_key) && contract === "moneyline_2way_full_game" ? "missing" : "not_applicable",
+    status: model.available ? "ok" : modelSupportedSport(e.sport_key) && contract === "moneyline_2way_full_game" ? "missing" : "not_applicable",
     detail: model.available ? model.version! : model.reason ?? "Unavailable",
   });
   const confirmed = lineups.filter((l) => l.status === "confirmed").length;
   const probable = lineups.filter((l) => l.status === "probable").length;
-  items.push({
-    key: "lineups",
-    label: "Lineups / starters",
-    status: confirmed === 2 ? "ok" : confirmed + probable > 0 ? "partial" : "unknown",
-    detail: confirmed === 2 ? "Both lineups confirmed" : confirmed + probable > 0 ? `${confirmed} confirmed, ${probable} probable only` : "Not announced or not available: unknown",
-  });
+  items.push(
+    fam === "tennis"
+      ? { key: "lineups", label: "Lineups / starters", status: "not_applicable", detail: "Individual sport: no lineups" }
+      : {
+          key: "lineups",
+          label: "Lineups / starters",
+          status: confirmed === 2 ? "ok" : confirmed + probable > 0 ? "partial" : "unknown",
+          detail: confirmed === 2 ? "Both lineups confirmed" : confirmed + probable > 0 ? `${confirmed} confirmed, ${probable} probable only` : "Not announced or not available: unknown",
+        },
+  );
   const injurySeen = deps.repo.injuryFeedSeen(ctx.dataset, e.sport_key, infoAsOf);
   items.push({
     key: "injuries",
@@ -628,28 +621,34 @@ export function analyzeEvent(deps: AnalysisDeps, ctx: AnalysisContext, eventId: 
   if (quoteSrc) facts.push(`Quotes from ${market.books.length} connected book(s); ${nCurrent} current within ${ctx.staleMinutes} minutes${cite([quoteSrc])}.`);
   lineups.forEach((l, i) => facts.push(`${l.team_name}: lineup ${l.status}${l.starter ? `, starting pitcher ${l.starter} (${l.starter_status})` : ""}${cite([lineupSrc[i]])}.`));
   injuries.forEach((inj, i) => facts.push(`${inj.player_name} (${inj.team_name}): ${injuryPhrase(inj.status)}, per ${inj.source} (${inj.confirmation})${cite([injurySrc[i]])}.`));
+  const unit = fam === "tennis" ? "Player" : "Team";
   if (model.prediction) {
     facts.push(
-      `Team ratings reflect ${model.prediction.gamesHomeThisSeason} and ${model.prediction.gamesAwayThisSeason} completed games this season (Elo ${Math.round(model.prediction.eloHome)} vs ${Math.round(model.prediction.eloAway)}).`,
+      `${unit} ratings reflect ${model.prediction.gamesHomeThisSeason} and ${model.prediction.gamesAwayThisSeason} completed ${fam === "tennis" ? "matches" : "games"} this season (Elo ${Math.round(model.prediction.eloHome)} vs ${Math.round(model.prediction.eloAway)}).`,
     );
+    if (model.prediction.expectedMargin != null) facts.push(`Model expected margin: ${homeName} ${model.prediction.expectedMargin >= 0 ? "by" : "losing by"} ${Math.abs(model.prediction.expectedMargin).toFixed(1)} points.`);
+    if (model.prediction.expectedTotal != null) facts.push(`Model expected total: ${model.prediction.expectedTotal.toFixed(1)} points, from both teams' recent scoring form.`);
   }
   if (weatherSrc && weather) facts.push(`Weather forecast: ${weather.precip_probability ?? "?"}% chance of precipitation${cite([weatherSrc])}.`);
   newsSrc.filter(({ n }) => n.claim_type === "official").slice(0, 3).forEach(({ n, id }) => facts.push(`Official: ${n.title}${cite([id])}.`));
   const assumptions: string[] = [];
-  if (model.available) {
-    assumptions.push("The model uses team ratings, home advantage" + (fitAvail?.featuresUsed.includes("rest_diff_days") ? " and rest days" : "") + "; weights were fitted on earlier seasons only.");
-    assumptions.push("The model does not see injuries, lineups or starting pitchers. News is shown as evidence but is not converted into a numeric adjustment.");
+  const unseen =
+    fam === "baseball" ? "injuries, lineups or starting pitchers" : fam === "tennis" ? "injuries, fatigue, retirements or withdrawals" : fam === "american_football" ? "injuries, quarterback changes or weather" : "injuries, rest decisions or lineups";
+  if (model.available && fitAvail) {
+    const used = fitAvail.featuresUsed.filter((f) => f !== "elo_diff_per_100").map((f) => featureLabelLower(f));
+    assumptions.push(`The model uses ${fam === "tennis" ? "player" : "team"} ratings (${fitAvail.config.label})${used.length ? `, ${used.join(", ")}` : ""}; weights were fitted on earlier seasons only.`);
+    assumptions.push(`The model does not see ${unseen}. News is shown as evidence but is not converted into a numeric adjustment.`);
   }
-  if (market.reference) assumptions.push("Margin removal is proportional (p = q / sum q). It approximates each book's view; it does not measure the true probability.");
+  if (market.reference) assumptions.push(`Margin removal: ${marketConfig.method}. ${marketConfig.note} It approximates the market's view; it does not measure the true probability.`);
   assumptions.push(`${spec.label}: ${spec.settlement}`);
   const missing = items.filter((i) => ["missing", "unknown", "stale", "partial"].includes(i.status)).map((i) => `${i.label}: ${i.detail}`);
   const changes: string[] = [];
-  if (confirmed < 2) changes.push("Lineup or starting-pitcher announcements.");
+  if (confirmed < 2 && fam !== "tennis") changes.push(fam === "baseball" ? "Lineup or starting-pitcher announcements." : "Lineup and availability announcements.");
   if (conflicts.length) changes.push(`Resolution of conflicting reports about ${conflicts.map((c) => c.player).join(", ")}.`);
   newsSrc.filter(({ n }) => n.claim_type === "speculation").slice(0, 2).forEach(({ n, id }) => changes.push(`Unconfirmed report: "${n.title}"${cite([id])}. Treat it as speculation until official.`));
   if (weather && wRel && (weather.precip_probability ?? 0) >= 50) changes.push("Weather: a high precipitation chance raises postponement risk (a postponed game is void).");
   changes.push("Price movement as books react to new information.");
-  if (model.available) changes.push("Anything the model does not measure, such as starting pitchers, injuries and motivation.");
+  if (model.available) changes.push(`Anything the model does not measure, such as ${unseen} and motivation.`);
 
   const started = ctx.asOf >= e.start_time;
   return {
@@ -662,6 +661,8 @@ export function analyzeEvent(deps: AnalysisDeps, ctx: AnalysisContext, eventId: 
     contract,
     market,
     otherMarkets,
+    marketConfig,
+    lines,
     model,
     combined,
     primary: { source: primarySource, probs: primaryProbs, mostLikely },
@@ -675,6 +676,21 @@ export function analyzeEvent(deps: AnalysisDeps, ctx: AnalysisContext, eventId: 
     explanation: { estimate, facts, assumptions, missing, changes },
     status: { started, resultKnown: e.status === "final", voided: e.status === "postponed" || e.status === "cancelled" },
   };
+}
+
+function featureLabelLower(f: string): string {
+  switch (f) {
+    case "home_advantage":
+      return "home advantage";
+    case "rest_diff_days":
+      return "rest days";
+    case "back_to_back_diff":
+      return "back-to-back games";
+    case "elo_diff_best_of_5":
+      return "best-of-five format";
+    default:
+      return f;
+  }
 }
 
 export function injuryPhrase(status: string): string {

@@ -14,6 +14,9 @@ import { ActivityLog } from "./activity";
 import { HttpClient, type Transport } from "./http";
 import { ModelService, analyzeEvent, type AnalysisContext, type GameAnalysis } from "./analysis";
 import { buildBoard, boardCsv, summarize } from "./board";
+import { Backtester, averageLines, valueFinder } from "./value";
+import { BALLDONTLIE_CAPABILITIES, NFLVERSE_CAPABILITIES, importResultsCsv } from "./providers/results";
+import { sportFamily } from "../shared/contracts";
 import { Classroom, ClassroomError, csvCell } from "./classroom";
 import { Evaluator } from "./evaluation";
 import { LiveIngest } from "./ingest";
@@ -41,6 +44,7 @@ export interface AppOptions {
 }
 
 export interface AppContext {
+  warmup: () => void;
   app: FastifyInstance;
   db: Db;
   repo: Repo;
@@ -80,7 +84,7 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
   const db = new Db(cfg.dbFile);
   const repo = new Repo(db);
   const settings = new SettingsStore(db);
-  const log = new ActivityLog(db, { oddsApiKey: cfg.oddsApiKey, anthropicApiKey: cfg.anthropicApiKey }, () => now().toISOString());
+  const log = new ActivityLog(db, { oddsApiKey: cfg.oddsApiKey, anthropicApiKey: cfg.anthropicApiKey, balldontlieApiKey: cfg.balldontlieApiKey }, () => now().toISOString());
   const http = new HttpClient(db, log, opts.transport);
   const models = new ModelService(repo, () => settings.get().staleQuoteMinutes);
   const classroom = new Classroom(db, repo);
@@ -97,6 +101,21 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
 
   const liveToday = () => localDateOf(now().toISOString(), settings.get().timezone);
   const analysisDeps = { repo, models };
+  const backtester = new Backtester(analysisDeps);
+
+  // Boards are expensive (one full analysis per game). Cache them per information time and data version,
+  // so the Value Finder, Average Lines and the board page can share one computation.
+  const boardCache = new Map<string, ReturnType<typeof buildBoard>>();
+  function cachedBoard(ctx: AnalysisContext, date: string) {
+    const v = db.get<{ q: number | null; e: string | null; n: number }>("SELECT (SELECT MAX(id) FROM quotes) q, (SELECT MAX(retrieved_at) FROM events) e, (SELECT COUNT(*) FROM events) n")!;
+    const key = JSON.stringify([ctx, date, v]);
+    const hit = boardCache.get(key);
+    if (hit) return hit;
+    const b = buildBoard(analysisDeps, ctx, date);
+    if (boardCache.size >= 12) boardCache.delete(boardCache.keys().next().value!);
+    boardCache.set(key, b);
+    return b;
+  }
 
   const scheduler = new Scheduler(
     db,
@@ -279,7 +298,7 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
 
   app.get("/api/settings", async () => ({
     settings: settings.get(),
-    secrets: { oddsApiKey: !!cfg.oddsApiKey, anthropicApiKey: !!cfg.anthropicApiKey, instructorPin: !!cfg.instructorPin },
+    secrets: { oddsApiKey: !!cfg.oddsApiKey, anthropicApiKey: !!cfg.anthropicApiKey, balldontlieApiKey: !!cfg.balldontlieApiKey, instructorPin: !!cfg.instructorPin },
   }));
 
   app.put("/api/settings", async (req) => {
@@ -298,12 +317,19 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
   // ---------------------------------------------------------------- providers
   function providerList() {
     const s = settings.get();
-    const caps = [ODDSAPI_CAPABILITIES, MLB_CAPABILITIES, OPENMETEO_CAPABILITIES, RSS_CAPABILITIES];
+    const caps = [ODDSAPI_CAPABILITIES, MLB_CAPABILITIES, NFLVERSE_CAPABILITIES, BALLDONTLIE_CAPABILITIES, OPENMETEO_CAPABILITIES, RSS_CAPABILITIES];
     return caps.map((c) => {
       const st = providerStatus(db, c.id);
-      const enabled =
-        c.id === "oddsapi" ? s.providers.oddsapi.enabled : c.id === "mlb" ? s.providers.mlb.enabled : c.id === "openmeteo" ? s.providers.openmeteo.enabled : s.providers.rss.enabled;
-      const keyConfigured = c.id === "oddsapi" ? !!cfg.oddsApiKey : true;
+      const enabledMap: Record<string, boolean> = {
+        oddsapi: s.providers.oddsapi.enabled,
+        mlb: s.providers.mlb.enabled,
+        nflverse: s.providers.nflverse.enabled,
+        balldontlie: s.providers.balldontlie.enabled,
+        openmeteo: s.providers.openmeteo.enabled,
+        rss: s.providers.rss.enabled,
+      };
+      const enabled = enabledMap[c.id] ?? false;
+      const keyConfigured = c.id === "oddsapi" ? !!cfg.oddsApiKey : c.id === "balldontlie" ? !!cfg.balldontlieApiKey : true;
       let state: "not_configured" | "disabled" | "never_used" | "ok" | "degraded" | "down" | "quota_exhausted" = "never_used";
       if (!keyConfigured) state = "not_configured";
       else if (!enabled) state = "disabled";
@@ -337,7 +363,7 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
 
   app.post("/api/providers/:id/test", async (req) => {
     requireInstructor(req);
-    const id = z.enum(["oddsapi", "mlb", "openmeteo", "rss"]).parse((req.params as { id: string }).id);
+    const id = z.enum(["oddsapi", "mlb", "nflverse", "balldontlie", "openmeteo", "rss"]).parse((req.params as { id: string }).id);
     const t0 = Date.now();
     let detail: string;
     switch (id) {
@@ -349,6 +375,17 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
       case "mlb": {
         const n = await ingest.mlb.refreshTeams(String(DateTime.fromJSDate(now()).year));
         detail = `${n} teams returned.`;
+        break;
+      }
+      case "nflverse": {
+        const csv = await ingest.nflverse.fetchCsv();
+        detail = `games.csv downloaded (${Math.round(csv.length / 1024)} KB, ${csv.split("\n").length - 1} rows).`;
+        break;
+      }
+      case "balldontlie": {
+        const today = localDateOf(toUtcIso(now()), settings.get().timezone);
+        const r = await ingest.balldontlie.refreshRange(today, today);
+        detail = `Key accepted. ${r.games} game(s) listed for ${today}.`;
         break;
       }
       case "openmeteo": {
@@ -377,6 +414,33 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
     return ingest.odds.historicalSnapshot(body.sport, body.date);
   });
 
+  app.post("/api/providers/nflverse/import", async (req) => {
+    requireInstructor(req);
+    return ingest.nflverse.importSeasons(ingest.nflSeasons(localDateOf(toUtcIso(now()), settings.get().timezone)));
+  });
+
+  app.post("/api/providers/balldontlie/import", async (req) => {
+    requireInstructor(req);
+    const { seasons, current } = ingest.nbaSeasons(localDateOf(toUtcIso(now()), settings.get().timezone));
+    return ingest.balldontlie.importSeasons(seasons, current);
+  });
+
+  // Results files the user downloaded themselves (e.g. tennis-data.co.uk saved as CSV). Up to 20 MB.
+  app.post("/api/import/results", { bodyLimit: 20_000_000 }, async (req) => {
+    requireInstructor(req);
+    const body = z
+      .object({
+        sport: z.string().regex(/^[a-z0-9_]+$/).max(60),
+        preset: z.enum(["tennis-data", "generic"]),
+        csv: z.string().min(1).max(19_000_000),
+      })
+      .parse(req.body);
+    if (body.preset === "tennis-data" && sportFamily(body.sport) !== "tennis") throw new HttpProblem(400, "The tennis-data preset needs a tennis sport (tennis_atp or tennis_wta).");
+    const r = importResultsCsv(repo, body.sport, body.csv, body.preset, toUtcIso(now()));
+    log.add("info", "import", `Imported ${r.imported} of ${r.rows} rows for ${body.sport} (${r.created} new games, ${r.quotes} closing quotes, ${r.skipped.length} skipped).`);
+    return r;
+  });
+
   app.post("/api/providers/mlb/history", async (req) => {
     requireInstructor(req);
     const season = String(DateTime.fromJSDate(now()).year);
@@ -388,7 +452,7 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
     const q = req.query as Record<string, string>;
     const ctx = ctxFrom(q);
     const date = localDateParam(q, ctx.dataset, ctx.asOf);
-    const board = buildBoard(analysisDeps, ctx, date);
+    const board = cachedBoard(ctx, date);
     const { analyses, ...rest } = board;
     void analyses;
     return { ...rest, items: rest.items.map((i) => (resultsHidden() && i.resultKnown ? { ...i, score: null, resultKnown: false, resultHidden: true } : i)) };
@@ -398,7 +462,7 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
     const q = req.query as Record<string, string>;
     const ctx = ctxFrom(q);
     const date = localDateParam(q, ctx.dataset, ctx.asOf);
-    const board = buildBoard(analysisDeps, ctx, date);
+    const board = cachedBoard(ctx, date);
     return sendCsv(reply, `board-${ctx.dataset}-${date}.csv`, boardCsv(board.items));
   });
 
@@ -764,6 +828,30 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
     return sendCsv(reply, `experiment-${exp.name}.csv`, lines.join("\r\n") + "\r\n");
   });
 
+  // ---------------------------------------------------------------- value finder & average lines
+  app.get("/api/value", async (req) => {
+    const q = req.query as Record<string, string>;
+    const ctx = ctxFrom(q);
+    const date = localDateParam(q, ctx.dataset, ctx.asOf);
+    const board = cachedBoard(ctx, date);
+    return { date, zone: ctx.zone, asOf: ctx.asOf, mode: ctx.mode, dataset: ctx.dataset, ...valueFinder(board.analyses) };
+  });
+
+  app.get("/api/value/backtest", async (req) => {
+    const q = req.query as Record<string, string>;
+    const ctx = ctxFrom(q);
+    const sports = evaluator.sports(ctx.dataset);
+    return { asOf: ctx.asOf, mode: ctx.mode, dataset: ctx.dataset, ...backtester.run(ctx.dataset, ctx.asOf, sports) };
+  });
+
+  app.get("/api/average-lines", async (req) => {
+    const q = req.query as Record<string, string>;
+    const ctx = ctxFrom(q);
+    const date = localDateParam(q, ctx.dataset, ctx.asOf);
+    const board = cachedBoard(ctx, date);
+    return { date, zone: ctx.zone, asOf: ctx.asOf, mode: ctx.mode, dataset: ctx.dataset, ...averageLines(board.analyses) };
+  });
+
   // ---------------------------------------------------------------- replay & demo clock
   app.get("/api/replay/range", async (req) => {
     const dataset = datasetSchema.parse((req.query as Record<string, string>).dataset ?? "demo");
@@ -846,7 +934,17 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
     db.close();
   });
 
-  return { app, db, repo, settings, log, http, models, classroom, evaluator, ingest, scheduler, ai };
+  /** Fit models and build today's demo board once, so the first page load is fast. */
+  function warmup(): void {
+    try {
+      const ctx = ctxFrom({ dataset: "demo" });
+      cachedBoard(ctx, localDateOf(ctx.asOf, ctx.zone));
+    } catch (e) {
+      log.add("warn", "server", `Warm-up skipped: ${(e as Error).message}`);
+    }
+  }
+
+  return { app, db, repo, settings, log, http, models, classroom, evaluator, ingest, scheduler, ai, warmup };
 }
 
 export type { EventRecord };

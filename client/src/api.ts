@@ -171,6 +171,7 @@ export interface BookQuoteView {
   ageMinutes: number | null;
   overround: number | null;
   noVig: Probs | null;
+  weight?: number | null;
 }
 
 export interface MarketView {
@@ -180,7 +181,7 @@ export interface MarketView {
   label: string;
   outcomes: Outcome[];
   books: BookQuoteView[];
-  reference: { probs: Probs; nBooks: number; range: Partial<Record<Outcome, [number, number]>>; method: string } | null;
+  reference: { probs: Probs; nBooks: number; range: Partial<Record<Outcome, [number, number]>>; method: string; devig?: string; weighted?: boolean } | null;
   referenceUnavailableReason: string | null;
   bestPrice: Partial<Record<Outcome, BestPrice>>;
 }
@@ -199,11 +200,41 @@ export interface ModelPrediction {
   pHome: number;
   low: number;
   high: number;
-  features: { name: string; value: number; weight: number; contribution: number }[];
+  features: { name: string; label?: string; value: number; weight: number; contribution: number }[];
   eloHome: number;
   eloAway: number;
   gamesHomeThisSeason: number;
   gamesAwayThisSeason: number;
+  expectedMargin?: number | null;
+  expectedTotal?: number | null;
+}
+
+export interface WinPushLoss {
+  win: number;
+  push: number;
+  loss: number;
+}
+
+export interface LineSide {
+  model: WinPushLoss | null;
+  market: number | null;
+  best: { decimal: number; american: number; book: string } | null;
+  ev: number | null;
+  combined: WinPushLoss | null;
+  combinedEv: number | null;
+  breakEven: number | null;
+}
+
+export interface LineAnalysis {
+  contract: "spread_full_game" | "total_full_game";
+  line: number;
+  booksQuoting: number;
+  isMainLine: boolean;
+  market: MarketView;
+  sides: Partial<Record<Outcome, LineSide>>;
+  modelExpected: number | null;
+  combinedExpected: number | null;
+  combinedWeight: number | null;
 }
 
 export interface Analysis {
@@ -237,6 +268,8 @@ export interface Analysis {
   contract: string;
   market: MarketView;
   otherMarkets: MarketView[];
+  marketConfig?: { method: string; methodKey: string; weighted: boolean; source: "default" | "fitted"; season: string | null; note: string };
+  lines?: LineAnalysis[];
   model: {
     available: boolean;
     reason: string | null;

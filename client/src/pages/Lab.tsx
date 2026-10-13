@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, getPin, qs, setPin, type Board, type BoardItem, type Outcome } from "../api";
 import { useApi, useApp } from "../state";
-import { fmtDateTime, fmtTime, formatDecimal, formatPct, formatPoints, localDate, outcomeLabel } from "../format";
+import { fmtDateTime, fmtTime, formatDecimal, formatPct, formatPoints, localDate, outcomeLabel, atWord } from "../format";
 import { Callout, Empty, ErrorBox, FictionalNote, Loading, Stat, Tabs } from "../components/ui";
 import { IconDownload, IconEye, IconEyeOff } from "../components/icons";
 import { mulberry32 } from "../../../shared/rng";
@@ -184,7 +184,7 @@ function PredictCard({ item, sessionId, author, blind, experimentId, focused }: 
     <article id={`predict-${item.eventId}`} className="card" style={focused ? { borderColor: "var(--accent)" } : undefined} aria-labelledby={`p-${item.eventId}`}>
       <div className="row-between">
         <h2 id={`p-${item.eventId}`} style={{ margin: 0, fontSize: "1rem" }}>
-          {item.away} at {item.home}
+          {item.away} {atWord(item.sport)} {item.home}
         </h2>
         <span className="subtle small">
           {fmtTime(item.start, zone, { weekday: "short", hour: "numeric", minute: "2-digit" })} · {item.contractShort}

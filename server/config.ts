@@ -12,6 +12,7 @@ export interface ServerConfig {
   allowRemote: boolean;
   instructorPin: string | null;
   oddsApiKey: string | null;
+  balldontlieApiKey: string | null;
   anthropicApiKey: string | null;
   aiModel: string;
   extraNewsFeeds: string[];
@@ -47,6 +48,7 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     allowRemote: env.ALLOW_REMOTE === "1" || env.ALLOW_REMOTE === "true",
     instructorPin: clean(env.INSTRUCTOR_PIN),
     oddsApiKey: clean(env.ODDS_API_KEY),
+    balldontlieApiKey: clean(env.BALLDONTLIE_API_KEY),
     anthropicApiKey: clean(env.ANTHROPIC_API_KEY),
     aiModel: clean(env.AI_MODEL) ?? "claude-opus-5-5",
     extraNewsFeeds: (env.NEWS_FEEDS ?? "")
@@ -66,9 +68,9 @@ export function isLoopbackHost(host: string): boolean {
 }
 
 /** Redact secrets from any string that might be logged (API keys in query strings, headers). */
-export function redact(s: string, cfg?: Pick<ServerConfig, "oddsApiKey" | "anthropicApiKey">): string {
+export function redact(s: string, cfg?: Pick<ServerConfig, "oddsApiKey" | "anthropicApiKey"> & { balldontlieApiKey?: string | null }): string {
   let out = s.replace(/(apiKey|api_key|key|token)=([^&\s"']+)/gi, "$1=[redacted]");
-  for (const secret of [cfg?.oddsApiKey, cfg?.anthropicApiKey]) {
+  for (const secret of [cfg?.oddsApiKey, cfg?.anthropicApiKey, cfg?.balldontlieApiKey]) {
     if (secret && secret.length >= 6) out = out.split(secret).join("[redacted]");
   }
   return out;

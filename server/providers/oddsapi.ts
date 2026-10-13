@@ -8,7 +8,8 @@
 // Credentials are sent as the apiKey query parameter and are redacted from every log line.
 
 import { z } from "zod";
-import { contractFromOddsApiMarket, contractId, CONTRACTS, sportFamily, type OutcomeKey } from "../../shared/contracts";
+import { contractFromOddsApiMarket, contractId, CONTRACTS, modelKeyFor, seasonOf, sportFamily, tennisBestOfFromKey, tennisSurfaceFromName, type OutcomeKey } from "../../shared/contracts";
+import { GameImporter, tennisShortAlias } from "./results";
 import { parseDecimal } from "../../shared/odds";
 import { toUtcIso } from "../../shared/time";
 import type { EventRecord, QuoteRecord } from "../repo";
@@ -74,7 +75,8 @@ export const ODDSAPI_CAPABILITIES: ProviderCapabilities = {
   history: "Documented: historical odds snapshots from June 2020 on paid plans (10-minute snapshots, 5-minute from September 2022). Disabled here unless you explicitly allow it.",
   costNotes: "Usage credits per request: markets x regions for live odds; 10x that for historical snapshots. Scores cost 1 (2 with completed games). /sports is free.",
   limitations: [
-    "Scores endpoint only returns completed games from the last 3 days.",
+    "Scores endpoint only returns completed games from the last 3 days. Tennis results are not taken from it: import a results file (Settings → Import results).",
+    "Each tennis tournament is a separate sport key; with automatic tennis enabled every active tournament is refreshed, and each costs credits.",
     "Overtime and settlement rules for h2h can differ by bookmaker; this app treats US-sport h2h as full-game including overtime and soccer h2h as 3-way regulation time.",
     "Not live-verified in the build environment (network blocked); covered by recorded-response contract tests.",
   ],
@@ -199,6 +201,26 @@ export class OddsApiProvider {
     return parsed.data;
   }
 
+  /** Active tennis tournament keys (each tournament is its own sport key on The Odds API). Free call. */
+  async activeTennisKeys(): Promise<string[]> {
+    const sports = await this.listSports();
+    return sports.filter((x) => x.active && x.group.toLowerCase() === "tennis" && !x.has_outrights && /^tennis_(atp|wta)_/.test(x.key)).map((x) => x.key);
+  }
+
+  /** Configured sports plus, when enabled, every active tennis tournament. */
+  async sportsToRefresh(): Promise<string[]> {
+    const s = this.deps.settings().providers.oddsapi;
+    const keys = [...s.sports];
+    if (s.tennisAuto) {
+      try {
+        for (const k of await this.activeTennisKeys()) if (!keys.includes(k)) keys.push(k);
+      } catch {
+        /* listing sports failed: refresh the configured ones only */
+      }
+    }
+    return keys;
+  }
+
   /** Fetch current odds for one sport and store quotes. Returns counts for the activity log. */
   async refreshOdds(sportKey: string): Promise<{ events: number; quotes: number; unmatched: number; books: string[] }> {
     const s = this.deps.settings().providers.oddsapi;
@@ -307,6 +329,20 @@ export class OddsApiProvider {
       if (linked.startsWith("oddsapi:")) this.upsertOddsEvent(sportKey, e, commence, retrievedAt, linked, knownAt);
       return linked;
     }
+    const storeKey = modelKeyFor(sportKey);
+    if (sportKey !== "baseball_mlb") {
+      // Another source (nflverse, balldontlie, an imported file) may already list this game: attach to it.
+      const h = this.resolveTeam(sportKey, e.home_team);
+      const a = this.resolveTeam(sportKey, e.away_team);
+      if (h && a) {
+        const found = new GameImporter(repo).findEvent(storeKey, h, a, commence, 150);
+        const takenBy = found ? repo.db.get<{ provider_event_id: string }>("SELECT provider_event_id FROM event_links WHERE provider = ? AND event_id = ?", [ID, found.id]) : null;
+        if (found && !found.id.startsWith("oddsapi:") && (!takenBy || takenBy.provider_event_id === e.id) && found.home_id === h) {
+          repo.linkEvent(ID, e.id, found.id, "teams+start-time", retrievedAt);
+          return found.id;
+        }
+      }
+    }
     if (sportKey === "baseball_mlb") {
       const h = repo.resolveParticipant("live", sportKey, e.home_team);
       const a = repo.resolveParticipant("live", sportKey, e.away_team);
@@ -336,24 +372,36 @@ export class OddsApiProvider {
     return id;
   }
 
+  /** Participants live under the model key (all ATP tournaments share one set of players). */
+  /** Existing participant for a feed name. Tennis result files write "Djokovic N."; the odds feed writes "Novak Djokovic". */
+  private resolveTeam(sportKey: string, name: string): string | null {
+    const key = modelKeyFor(sportKey);
+    const short = sportFamily(key) === "tennis" ? tennisShortAlias(name) : null;
+    return this.deps.repo.resolveParticipant("live", key, name) ?? (short ? this.deps.repo.resolveParticipant("live", key, short) : null);
+  }
+
   private teamId(sportKey: string, name: string): string {
     const repo = this.deps.repo;
-    const existing = repo.resolveParticipant("live", sportKey, name);
+    const key = modelKeyFor(sportKey);
+    const short = sportFamily(key) === "tennis" ? tennisShortAlias(name) : null;
+    const existing = this.resolveTeam(sportKey, name);
     if (existing) return existing;
-    const id = `odds-team:${sportKey}:${normalizeAlias(name).replace(/ /g, "-")}`;
-    repo.upsertParticipant({ id, dataset: "live", sport_key: sportKey, name, short_name: null, abbreviation: null, aliases: [], meta: { source: ID } });
+    const id = `odds-team:${key}:${normalizeAlias(name).replace(/ /g, "-")}`;
+    repo.upsertParticipant({ id, dataset: "live", sport_key: key, name, short_name: null, abbreviation: null, aliases: short ? [short] : [], meta: { source: ID } });
     return id;
   }
 
   private upsertOddsEvent(sportKey: string, e: z.infer<typeof oddsEventSchema>, commence: string, retrievedAt: string, id: string, knownAt: string | null = null): void {
     const infoTime = knownAt ?? retrievedAt;
     const existing = this.deps.repo.event(id);
+    const storeKey = modelKeyFor(sportKey);
+    const tennis = sportFamily(sportKey) === "tennis";
     this.deps.repo.upsertEvent({
       id,
       dataset: "live",
-      sport_key: sportKey,
+      sport_key: storeKey,
       league: e.sport_title ?? sportKey,
-      season: null,
+      season: seasonOf(storeKey, commence),
       home_id: this.teamId(sportKey, e.home_team!),
       away_id: this.teamId(sportKey, e.away_team!),
       start_time: commence,
@@ -365,7 +413,7 @@ export class OddsApiProvider {
       regulation_home: existing?.regulation_home ?? null,
       regulation_away: existing?.regulation_away ?? null,
       final_is_regulation: soccerLeagueFinalIsRegulation(sportKey) ? 1 : 0,
-      neutral_site: 0,
+      neutral_site: tennis ? 1 : 0,
       venue_name: null,
       venue_lat: null,
       venue_lon: null,
@@ -377,7 +425,9 @@ export class OddsApiProvider {
       source_updated_at: retrievedAt,
       retrieved_at: retrievedAt,
       known_at: existing && existing.known_at < infoTime ? existing.known_at : infoTime,
-      extra: { providerEventId: e.id },
+      extra: tennis
+        ? { providerEventId: e.id, providerSportKey: sportKey, surface: tennisSurfaceFromName(`${sportKey} ${e.sport_title ?? ""}`), bestOf: tennisBestOfFromKey(sportKey), tournament: e.sport_title ?? null, scoreUnit: "sets" }
+        : { providerEventId: e.id, providerSportKey: sportKey },
     });
   }
 

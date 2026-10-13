@@ -41,6 +41,8 @@ async function main(): Promise<void> {
   console.log(`  Odds API key: ${config.oddsApiKey ? "configured" : "not set (demo and keyless providers still work)"}`);
   console.log("  Press Ctrl+C to stop.");
   console.log("");
+  // Fit the models in the background right away so the first page load does not wait for them.
+  setTimeout(() => ctx.warmup(), 50);
 
   let closing = false;
   const shutdown = async (signal: string) => {

@@ -4,12 +4,13 @@
 
 import { calibrationBins, expectedCalibrationError, brier, brierMulti, logLoss, logLossMulti, mean, pairedBootstrapCI } from "../shared/evaluation";
 import { sigmoid, expectedNetPoints, settledNetPoints } from "../shared/odds";
-import { CONTRACTS, sportFamily } from "../shared/contracts";
+import { CONTRACTS, seasonOf, sportFamily } from "../shared/contracts";
 import { realisedOutcome } from "../shared/settlement";
 import type { Dataset, Repo } from "./repo";
 import { eventAsOf } from "./repo";
-import { MODEL_SPORTS, ModelService, buildMarket, primaryContract } from "./analysis";
-import { runElo, linearPredictor, type ModelFit } from "./model";
+import { MODEL_SPORTS, ModelService, primaryContract } from "./analysis";
+import { FEATURES, MARGIN_RANGE, TOTAL_RANGE, blendedCover, discreteDistribution, lineProbabilities, runElo, linearPredictor, sportConfig, type FeatureRow, type ModelFit } from "./model";
+import { linesOffered, methodLabel } from "./market";
 import { json } from "./db";
 
 interface Scored {
@@ -43,7 +44,7 @@ export class Evaluator {
       "SELECT season, start_time FROM events WHERE dataset = ? AND sport_key = ? AND start_time <= ? ORDER BY start_time DESC LIMIT 1",
       [dataset, sportKey, asOf],
     );
-    return r ? r.season ?? r.start_time.slice(0, 4) : null;
+    return r ? r.season ?? seasonOf(sportKey, r.start_time) : null;
   }
 
   report(dataset: Dataset, sportKey: string, asOf: string) {
@@ -51,14 +52,16 @@ export class Evaluator {
     if (!season) return { sportKey, available: false, reason: "No games for this sport have been loaded yet." };
     const contract = primaryContract(sportKey);
     const finals = this.repo.finalsBefore(dataset, sportKey, asOf);
-    const holdoutGames = finals.filter((g) => (g.season ?? g.start_time.slice(0, 4)) === season);
+    const holdoutGames = finals.filter((g) => (g.season ?? seasonOf(sportKey, g.start_time)) === season);
+    const mcfg = this.models.markets.configFor(dataset, sportKey, season, contract, asOf);
     const base = {
       sportKey,
       season,
       asOf,
       contract,
       contractLabel: CONTRACTS[contract].label,
-      evaluationTiming: "Market reference = margin-adjusted consensus of quotes known 60 minutes before the scheduled start (stale quotes excluded).",
+      evaluationTiming: `Market reference = margin-adjusted consensus of quotes known 60 minutes before the scheduled start (stale quotes excluded; ${methodLabel(mcfg.method).toLowerCase()} margin removal${Object.keys(mcfg.weights).length ? ", accuracy-weighted books" : ""}).`,
+      marketSettings: { method: mcfg.method, methodLabel: methodLabel(mcfg.method), source: mcfg.source, weighted: Object.keys(mcfg.weights).length > 0, calibration: mcfg.calibration },
     };
 
     if (!MODEL_SPORTS.has(sportKey) || contract !== "moneyline_2way_full_game") {
@@ -77,13 +80,14 @@ export class Evaluator {
   private walkForward(fit: ModelFit, finals: ReturnType<Repo["finalsBefore"]>, holdoutIds: string[], schedule: ReturnType<Repo["scheduleFor"]>) {
     const ids = new Set(holdoutIds);
     const sorted = [...finals].sort((a, b) => a.start_time.localeCompare(b.start_time) || a.id.localeCompare(b.id));
-    const { rows } = runElo(sorted, fit.params, schedule);
+    const byId = new Map(sorted.map((g) => [g.id, g]));
+    const { rows } = runElo(sorted, fit.params, schedule, sportConfig(fit.sportKey));
     const hold = rows.filter((r) => ids.has(r.id));
     const pm = hold.map((r) => sigmoid(linearPredictor(fit.beta, r.x)));
     const ys = hold.map((r) => r.y);
     const coin = hold.map(() => 0.5);
     const homeRate = hold.map(() => fit.homeWinRateTrain);
-    const pk: (number | null)[] = hold.map((r) => this.models.marketHomeAt(r.id, r.start_time));
+    const pk: (number | null)[] = hold.map((r) => this.models.marketHomeAt(r.id));
     const withMkt = hold.map((_, i) => i).filter((i) => pk[i] != null);
     const combinedP = fit.combined ? withMkt.map((i) => sigmoid(fit.combined!.a * Math.log(pm[i] / (1 - pm[i])) + fit.combined!.b * Math.log(pk[i]! / (1 - pk[i]!)))) : null;
 
@@ -93,10 +97,9 @@ export class Evaluator {
     const perBet: number[] = [];
     hold.forEach((r, i) => {
       if (pk[i] == null) return;
-      const t = new Date(Date.parse(r.start_time) - 3600000).toISOString().replace(/\.\d{3}Z$/, "Z");
-      const m = buildMarket(this.repo.latestQuotes(r.id, t), "moneyline_2way_full_game", null, { start_time: r.start_time }, t, this.staleMinutes());
+      const m = this.models.markets.referenceAt(byId.get(r.id)!, "moneyline_2way_full_game", null);
       for (const o of ["home", "away"] as const) {
-        const bp = m.bestPrice[o];
+        const bp = m?.bestPrice[o];
         const p = o === "home" ? pm[i] : 1 - pm[i];
         if (bp && expectedNetPoints(p, bp.decimal) > 0) {
           const won = (o === "home") === (r.y === 1);
@@ -120,7 +123,8 @@ export class Evaluator {
       model: {
         version: fit.version,
         params: fit.params,
-        weights: Object.fromEntries(["home_advantage", "elo_diff_per_100", "rest_diff_days"].map((n, i) => [n, fit.beta[i]])),
+        weights: Object.fromEntries(FEATURES.map((n, i) => [n, fit.beta[i]])),
+        config: fit.config,
         featuresUsed: fit.featuresUsed,
         notes: fit.notes,
         gridSearched: fit.gridSearched,
@@ -131,6 +135,7 @@ export class Evaluator {
         holdout: { from: hold[0]?.start_time ?? null, to: hold[hold.length - 1]?.start_time ?? null, n: hold.length, seasons: [fit.forecastSeason] },
       },
       validationMetrics: fit.validationMetrics,
+      lines: this.lineEvaluation(fit, hold, byId),
       holdout: {
         n: hold.length,
         warning: sampleWarning(hold.length),
@@ -155,6 +160,71 @@ export class Evaluator {
     };
   }
 
+  /**
+   * Spreads and totals on the holdout: the model's probability of covering the most-quoted line (pushes
+   * excluded, as they are refunded) against the market's margin-adjusted probability for the same line.
+   */
+  private lineEvaluation(fit: ModelFit, hold: FeatureRow[], byId: Map<string, ReturnType<Repo["finalsBefore"]>[number]>) {
+    const out: Record<string, unknown> = {};
+    for (const lc of ["spread_full_game", "total_full_game"] as const) {
+      const dm = lc === "spread_full_game" ? fit.margin : fit.total;
+      if (!dm) {
+        out[lc] = null;
+        continue;
+      }
+      const blend = fit.lineBlend[lc === "spread_full_game" ? "spread" : "total"];
+      const pm: number[] = [];
+      const pc: number[] = [];
+      const pk: number[] = [];
+      const ys: (0 | 1)[] = [];
+      let pushes = 0;
+      let absErr = 0;
+      let nErr = 0;
+      for (const r of hold) {
+        const mu = lc === "spread_full_game" ? linearPredictor(dm.beta, [r.x[0], r.x[1]]) : Number.isFinite(r.totalFeature) ? linearPredictor(dm.beta, [1, r.totalFeature]) : NaN;
+        if (!Number.isFinite(mu)) continue;
+        absErr += Math.abs((lc === "spread_full_game" ? r.margin : r.total) - mu);
+        nErr++;
+        const e = byId.get(r.id);
+        if (!e) continue;
+        const snap = this.models.markets.snapshot(e.id, e.start_time, 60);
+        const main = linesOffered(snap.quotes, lc)[0];
+        if (!main) continue;
+        const m = this.models.markets.referenceAt(e, lc, main.line);
+        const first = lc === "spread_full_game" ? "home" : "over";
+        const mk = m?.reference?.probs[first];
+        if (mk == null) continue;
+        const value = lc === "spread_full_game" ? r.margin + main.line : r.total - main.line;
+        if (value === 0) {
+          pushes++;
+          continue;
+        }
+        const dist = discreteDistribution(mu, dm, lc === "spread_full_game" ? MARGIN_RANGE : TOTAL_RANGE);
+        const lp = lc === "spread_full_game" ? lineProbabilities(dist, main.line, "plus") : lineProbabilities(dist, -main.line, "plus");
+        const p = lp.win / Math.max(1e-9, lp.win + lp.loss);
+        const clamp = (x: number) => Math.min(1 - 1e-6, Math.max(1e-6, x));
+        pm.push(clamp(p));
+        pc.push(clamp(blend ? blendedCover(dm, lc, main.line, mu, mk, blend.w).p : p));
+        pk.push(mk);
+        ys.push(value > 0 ? 1 : 0);
+      }
+      out[lc] = {
+        n: pm.length,
+        pushes,
+        warning: sampleWarning(pm.length),
+        meanAbsError: nErr ? absErr / nErr : null,
+        model: pm.length ? score2(pm, ys) : null,
+        market: pk.length ? score2(pk, ys) : null,
+        combined: blend && pc.length ? score2(pc, ys) : null,
+        combinedWeight: blend?.w ?? null,
+        combinedMinusMarketLogLoss: blend && pc.length >= 20 ? pairedBootstrapCI(pc.map((p, i) => logLoss(p, ys[i])), pk.map((p, i) => logLoss(p, ys[i]))) : null,
+        modelMinusMarketLogLoss: pm.length >= 20 ? pairedBootstrapCI(pm.map((p, i) => logLoss(p, ys[i])), pk.map((p, i) => logLoss(p, ys[i]))) : null,
+        note: "Most-quoted line 60 minutes before the start; pushes are refunded and excluded from scoring.",
+      };
+    }
+    return out;
+  }
+
   /** Market-only evaluation (e.g. 3-way soccer): market reference vs uniform and frequency baselines. */
   private marketOnly(sportKey: string, games: ReturnType<Repo["finalsBefore"]>, contract: ReturnType<typeof primaryContract>) {
     const outcomes = CONTRACTS[contract].outcomes;
@@ -169,9 +239,8 @@ export class Evaluator {
         finalIsRegulation: !!g.final_is_regulation,
       });
       if (!r) continue;
-      const t = new Date(Date.parse(g.start_time) - 3600000).toISOString().replace(/\.\d{3}Z$/, "Z");
-      const m = buildMarket(this.repo.latestQuotes(g.id, t), contract, null, { start_time: g.start_time }, t, this.staleMinutes());
-      if (!m.reference) continue;
+      const m = this.models.markets.referenceAt(g, contract, null);
+      if (!m?.reference) continue;
       rows.push({ probs: outcomes.map((o) => m.reference!.probs[o] ?? 0), idx: outcomes.indexOf(r) });
     }
     const uniform = outcomes.map(() => 1 / outcomes.length);

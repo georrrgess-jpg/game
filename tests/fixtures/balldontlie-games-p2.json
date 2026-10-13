@@ -1,0 +1,5 @@
+{"data":[
+ {"id":1003,"date":"2024-10-23","datetime":"2024-10-23T23:00:00.000Z","season":2024,"status":"Final","period":4,"time":"Final","postseason":false,"home_team_score":115,"visitor_team_score":116,"home_team":{"id":13,"conference":"West","division":"Pacific","city":"LA","name":"Clippers","full_name":"LA Clippers","abbreviation":"LAC"},"visitor_team":{"id":25,"conference":"West","division":"Northwest","city":"Phoenix","name":"Suns","full_name":"Phoenix Suns","abbreviation":"PHX"}},
+ {"id":1004,"date":"2024-10-24","datetime":"2024-10-24T23:30:00.000Z","season":2024,"status":"7:30 pm ET","period":0,"time":null,"postseason":false,"home_team_score":0,"visitor_team_score":0,"home_team":{"id":2,"conference":"East","division":"Atlantic","city":"Boston","name":"Celtics","full_name":"Boston Celtics","abbreviation":"BOS"},"visitor_team":{"id":20,"conference":"East","division":"Atlantic","city":"New York","name":"Knicks","full_name":"New York Knicks","abbreviation":"NYK"}},
+ {"bad":"row"}
+],"meta":{"per_page":100}}

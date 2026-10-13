@@ -1,0 +1,6 @@
+ATP,Location,Tournament,Date,Series,Court,Surface,Round,Best of,Winner,Loser,WRank,LRank,W1,L1,W2,L2,W3,L3,W4,L4,W5,L5,Wsets,Lsets,Comment,B365W,B365L,PSW,PSL,MaxW,MaxL,AvgW,AvgL
+1,London,Wimbledon,01/07/2024,Grand Slam,Outdoor,Grass,1st Round,5,Djokovic N.,Kopriva V.,2,123,6,1,6,2,6,2,,,,,3,0,Completed,1.01,21,1.02,22.5,1.03,26,1.01,18.2
+2,London,Wimbledon,02/07/2024,Grand Slam,Outdoor,Grass,1st Round,5,Alcaraz C.,Lajal M.,3,263,7,6,7,5,6,2,,,,,3,0,Completed,1.01,23,1.01,25,1.02,30,1.01,19.5
+3,Madrid,Mutua Madrid Open,25/04/2024,Masters 1000,Outdoor,Clay,2nd Round,3,"De Minaur A.",Bergs Z.,11,92,6,3,7,6,,,,,,,2,0,Completed,1.2,4.5,1.21,4.9,1.25,5.2,1.19,4.4
+4,Madrid,Mutua Madrid Open,26/04/2024,Masters 1000,Outdoor,Clay,2nd Round,3,Ruud C.,Zverev A.,7,5,6,3,1,0,,,,,,,1,0,Retired,2.2,1.66,2.25,1.7,2.4,1.75,2.15,1.65
+5,Madrid,Mutua Madrid Open,bad-date,Masters 1000,Outdoor,Clay,2nd Round,3,Sinner J.,Kecmanovic M.,2,60,6,4,6,4,,,,,,,2,0,Completed,1.05,10,1.05,11,1.06,13,1.04,9.5

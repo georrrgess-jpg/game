@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, qs, type Board, type BoardItem, type Outcome, type StepResult } from "../api";
 import { useApi, useApp } from "../state";
-import { ago, fmtDate, fmtTime, formatAmerican, formatDecimal, formatPct, formatPctPoints, localDate, outcomeLabel, shiftDate, sportLabel, statusLabel } from "../format";
+import { ago, fmtDate, fmtTime, formatAmerican, formatDecimal, formatPct, formatPctPoints, localDate, outcomeLabel, shiftDate, sportLabel, statusLabel, atWord } from "../format";
 import { Callout, CompletenessMeter, Empty, ErrorBox, FictionalNote, Loading, ProbBar, Stat, Tabs, VerdictChip } from "../components/ui";
 import { IconDownload, IconPrint, IconRefresh, IconSpark, IconWarn } from "../components/icons";
 
@@ -342,7 +342,7 @@ function LikelyView({ items }: { items: BoardItem[] }) {
                 <h2 className="teams" id={`g-${i.eventId}`} style={{ margin: 0 }}>
                   <Link to={`/games/${encodeURIComponent(i.eventId)}`}>
                     {i.away}
-                    <span className="at">at</span>
+                    <span className="at">{atWord(i.sport)}</span>
                     {i.home}
                   </Link>
                 </h2>
@@ -462,7 +462,7 @@ function PriceView({ items, outcome, setOutcome }: { items: BoardItem[]; outcome
               <tr key={i.eventId}>
                 <td>
                   <Link to={`/games/${encodeURIComponent(i.eventId)}`}>
-                    {i.away} at {i.home}
+                    {i.away} {atWord(i.sport)} {i.home}
                   </Link>
                   <div className="subtle small">{fmtTime(i.start, zone, { hour: "numeric", minute: "2-digit" })} · {i.contractShort}</div>
                 </td>
@@ -536,7 +536,7 @@ function GapView({ items }: { items: BoardItem[] }) {
                 <tr key={i.eventId}>
                   <td>
                     <Link to={`/games/${encodeURIComponent(i.eventId)}`}>
-                      {i.away} at {i.home}
+                      {i.away} {atWord(i.sport)} {i.home}
                     </Link>
                     <div className="subtle small">
                       {i.market?.nBooks} book(s) · {i.completeness.available}/{i.completeness.applicable} inputs
@@ -572,7 +572,7 @@ function GapView({ items }: { items: BoardItem[] }) {
             {without.map((i) => (
               <li key={i.eventId}>
                 <Link to={`/games/${encodeURIComponent(i.eventId)}`}>
-                  {i.away} at {i.home}
+                  {i.away} {atWord(i.sport)} {i.home}
                 </Link>
                 : <span className="text-2">{!i.model ? i.modelUnavailable : i.marketUnavailable}</span>
               </li>

@@ -118,7 +118,7 @@ function ProvidersPanel({ s, reload }: { s: SettingsResp; reload: () => void }) 
   return (
     <div className="stack">
       <Callout kind="info" title="What works without keys.">
-        The demo world, Classroom Lab, Model Report and all calculators work offline. With no key at all you can also enable the MLB Stats API (schedules, results, probable pitchers, lineups, injured lists), Open-Meteo (weather) and RSS news. Market quotes need The Odds API key (ODDS_API_KEY in .env). The optional AI explanation needs ANTHROPIC_API_KEY.
+        The demo world, Classroom Lab, Model Report, Knowledge Center and all calculators work offline. With no key at all you can also enable the MLB Stats API (schedules, results, probable pitchers, lineups, injured lists), nflverse (NFL schedules, results and closing lines), Open-Meteo (weather) and RSS news, and import tennis results files below. NBA history needs a free balldontlie key (BALLDONTLIE_API_KEY). Market quotes need The Odds API key (ODDS_API_KEY in .env). The optional AI explanation needs ANTHROPIC_API_KEY.
       </Callout>
       <Callout kind="warn" title="Coverage is never 'all sportsbooks'.">
         Best prices are always "highest among connected sources". The books, sports and markets actually seen on this installation are listed under each provider after a refresh.
@@ -198,9 +198,12 @@ function ProvidersPanel({ s, reload }: { s: SettingsResp; reload: () => void }) 
           {Object.keys(p.observed).length > 0 && <ObservedCoverage observed={p.observed} />}
           {p.id === "oddsapi" && <OddsApiConfig cfg={st.providers.oddsapi} save={save} />}
           {p.id === "mlb" && <MlbConfig cfg={st.providers.mlb} save={save} />}
+          {p.id === "nflverse" && <HistoryConfig id="nflverse" cfg={st.providers.nflverse} save={save} max={10} label="NFL seasons" />}
+          {p.id === "balldontlie" && <HistoryConfig id="balldontlie" cfg={st.providers.balldontlie} save={save} max={5} label="NBA seasons" />}
           {p.id === "rss" && <RssConfig cfg={st.providers.rss} save={save} />}
         </section>
       ))}
+      <ImportResults />
       <section className="card">
         <div className="card-head">
           <div>
@@ -300,7 +303,7 @@ function OddsApiConfig({ cfg, save }: { cfg: any; save: (p: unknown, m?: string)
           ))}
         </fieldset>
         <fieldset className="row" style={{ border: 0, padding: 0 }}>
-          <legend className="small">Markets (each adds cost; only moneylines are modelled)</legend>
+          <legend className="small">Markets (each adds cost; spreads and totals are modelled for basketball and football)</legend>
           {["h2h", "h2h_3_way", "spreads", "totals"].map((m) => (
             <label key={m} className="check">
               <input type="checkbox" checked={cfg.markets.includes(m)} onChange={() => save({ providers: { oddsapi: { markets: toggle(cfg.markets, m) } } })} />
@@ -334,8 +337,151 @@ function OddsApiConfig({ cfg, save }: { cfg: any; save: (p: unknown, m?: string)
           <input type="checkbox" checked={cfg.allowHistorical} onChange={(e) => save({ providers: { oddsapi: { allowHistorical: e.target.checked } } })} />
           Allow historical snapshot imports (paid plans only; 10× credits per request)
         </label>
+        <label className="check">
+          <input type="checkbox" checked={cfg.tennisAuto} onChange={(e) => save({ providers: { oddsapi: { tennisAuto: e.target.checked } } })} />
+          Also refresh every active tennis tournament (each tournament is a separate sport key and costs credits on every refresh)
+        </label>
+        <p className="small subtle">
+          Useful keys: basketball_nba, americanfootball_nfl, baseball_mlb, icehockey_nhl, soccer_epl. Tennis tournaments use keys like tennis_atp_wimbledon; their players share one ATP or WTA rating list.
+        </p>
       </div>
     </details>
+  );
+}
+
+function HistoryConfig({ id, cfg, save, max, label }: { id: "nflverse" | "balldontlie"; cfg: any; save: (p: unknown, m?: string) => Promise<boolean>; max: number; label: string }) {
+  const { toast } = useApp();
+  const [busy, setBusy] = useState(false);
+  return (
+    <details className="disclosure" style={{ marginTop: 10 }}>
+      <summary>{label} for the model</summary>
+      <div className="disclosure-body stack-sm">
+        <p>
+          The model needs at least two completed seasons before the season being forecast. Imported games are matched to games already in the database (same teams, start within 2.5 hours), so odds stay attached.
+          {id === "balldontlie" && " The free tier allows about 5 requests per minute, so importing a season takes a few minutes; keep this page open."}
+        </p>
+        <div className="row">
+          <label className="field">
+            Previous seasons to import
+            <NumberSave value={cfg.historySeasons} min={1} max={max} onSave={(v) => save({ providers: { [id]: { historySeasons: v } } })} />
+          </label>
+          {id === "balldontlie" && (
+            <label className="field">
+              Requests per minute (your plan's limit)
+              <NumberSave value={cfg.requestsPerMinute} min={1} max={600} onSave={(v) => save({ providers: { balldontlie: { requestsPerMinute: v } } })} />
+            </label>
+          )}
+        </div>
+        <span>
+          <button
+            className="btn btn-sm"
+            disabled={!cfg.enabled || busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const r = await api.post<{ games: number; created: number; seasons: number[] }>(`/api/providers/${id}/import`);
+                toast(`Imported ${r.games} games (${r.created} new) for ${r.seasons.join(", ")}.`);
+              } catch (e) {
+                toast((e as Error).message, "error");
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? "Importing…" : "Import history now"}
+          </button>
+        </span>
+      </div>
+    </details>
+  );
+}
+
+interface CsvImportResult {
+  rows: number;
+  imported: number;
+  created: number;
+  quotes: number;
+  skipped: { row: number; reason: string }[];
+}
+
+function ImportResults() {
+  const { toast, bumpData } = useApp();
+  const [sport, setSport] = useState("tennis_atp");
+  const [preset, setPreset] = useState<"tennis-data" | "generic">("tennis-data");
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<CsvImportResult | null>(null);
+  const run = async () => {
+    if (!file) return;
+    if (file.size > 19_000_000) return toast("That file is larger than 19 MB. Split it by season.", "error");
+    setBusy(true);
+    setResult(null);
+    try {
+      const csv = await file.text();
+      const r = await api.post<CsvImportResult>("/api/import/results", { sport, preset, csv });
+      setResult(r);
+      bumpData();
+      toast(`Imported ${r.imported} of ${r.rows} rows.`);
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="card" aria-labelledby="imp-h">
+      <h2 id="imp-h">Import results (CSV)</h2>
+      <p className="small text-2">
+        Add history from a file you downloaded yourself; nothing is fetched. For tennis, season files from tennis-data.co.uk work once saved as CSV (columns Date, Surface, Best of, Winner, Loser, Wsets, Lsets, Comment, and the PSW/PSL and AvgW/AvgL closing odds when present). Any sport can use the generic format with columns{" "}
+        <code>date, home, away, home_score, away_score</code> and optionally <code>time</code> (UTC, HH:MM), <code>neutral</code>, <code>surface</code>, <code>best_of</code>.
+      </p>
+      <div className="row" style={{ alignItems: "flex-end" }}>
+        <label className="field">
+          Sport
+          <select value={sport} onChange={(e) => setSport(e.target.value)}>
+            <option value="tennis_atp">Tennis (ATP)</option>
+            <option value="tennis_wta">Tennis (WTA)</option>
+            <option value="basketball_nba">NBA</option>
+            <option value="americanfootball_nfl">NFL</option>
+            <option value="baseball_mlb">MLB</option>
+            <option value="icehockey_nhl">NHL (market only)</option>
+          </select>
+        </label>
+        <label className="field">
+          Format
+          <select value={preset} onChange={(e) => setPreset(e.target.value as "tennis-data" | "generic")}>
+            <option value="tennis-data">tennis-data.co.uk (saved as CSV)</option>
+            <option value="generic">Generic results CSV</option>
+          </select>
+        </label>
+        <label className="field">
+          File
+          <input type="file" accept=".csv,text/csv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+        </label>
+        <button className="btn btn-primary btn-sm" onClick={run} disabled={!file || busy}>
+          {busy ? "Importing…" : "Import"}
+        </button>
+      </div>
+      {result && (
+        <div className="small" style={{ marginTop: 10 }} role="status">
+          <p>
+            {result.imported} of {result.rows} rows imported ({result.created} new games, {result.quotes} closing quotes stored 60 minutes before each start).
+          </p>
+          {result.skipped.length > 0 && (
+            <details className="disclosure">
+              <summary>{result.skipped.length} row(s) skipped</summary>
+              <ul className="disclosure-body list-plain">
+                {result.skipped.map((x) => (
+                  <li key={x.row}>
+                    Row {x.row}: {x.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -534,7 +680,7 @@ function SchedulerPanel({ s, reload }: { s: SettingsResp; reload: () => void }) 
           <div className="row">
             <select aria-label="Filter activity by category" value={cat} onChange={(e) => setCat(e.target.value)}>
               <option value="">All categories</option>
-              {["scheduler", "refresh", "analyze", "oddsapi", "mlb", "openmeteo", "rss", "ai", "classroom", "demo", "settings", "server"].map((c) => (
+              {["scheduler", "refresh", "analyze", "oddsapi", "mlb", "nflverse", "balldontlie", "import", "openmeteo", "rss", "ai", "classroom", "demo", "settings", "server"].map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>

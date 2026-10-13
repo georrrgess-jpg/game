@@ -119,7 +119,7 @@ test("Historical replay and connected mode are clearly labelled", async ({ page 
 });
 
 test("Every page renders without overflow, and keyboard focus is visible", async ({ page }) => {
-  for (const path of ["/", "/games", "/markets", "/evidence", "/lab", "/report", "/settings"]) {
+  for (const path of ["/", "/value", "/lines", "/learn", "/games", "/markets", "/evidence", "/lab", "/report", "/settings"]) {
     await page.goto(path);
     await expect(page.locator("h1")).toBeVisible();
     await noHorizontalOverflow(page);
@@ -129,7 +129,7 @@ test("Every page renders without overflow, and keyboard focus is visible", async
   await expect(page.getByText(/Calibration on the holdout season/)).toBeVisible();
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: "The Odds API (v4)" })).toBeVisible();
-  await expect(page.getByText(/Not configured \(no key\)/)).toBeVisible();
+  await expect(page.getByText(/Not configured \(no key\)/).first()).toBeVisible();
   // Skip link is the first focus stop and has a visible outline (keyboard users; not applicable to touch).
   if (test.info().project.name === "mobile") return;
   await page.goto("/");
@@ -152,4 +152,63 @@ test("Preferences: theme and reduced motion apply", async ({ page }) => {
   await noHorizontalOverflow(page);
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+});
+
+test("Value Finder: likelihood and value are separate views, with an honest track record", async ({ page }) => {
+  await page.goto("/value");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("2026");
+  await expect(page.getByRole("heading", { name: "Highest estimated chance of winning" })).toBeVisible();
+  await expect(page.locator("table").first()).toContainText("Break-even");
+  await page.getByRole("tab", { name: "Price discrepancies" }).click();
+  await expect(page.getByRole("heading", { name: "Prices that beat the consensus" })).toBeVisible();
+  await page.getByRole("tab", { name: "Arbitrage" }).click();
+  await expect(page.getByRole("heading", { name: "Arbitrage", exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Track record" }).click();
+  await expect(page.getByRole("heading", { name: "Price beats the consensus (grade B rule)" })).toBeVisible();
+  await expect(page.getByText(/Closing line value, 95% interval/).first()).toBeVisible();
+  await expect(page.getByText(/\block\b|guaranteed win/i)).toHaveCount(0);
+  await noHorizontalOverflow(page);
+  // Sport filter
+  await page.getByRole("tab", { name: "Most likely" }).click();
+  await page.getByLabel("Sport", { exact: true }).selectOption("demo_tennis");
+  await expect(page.locator("tbody tr").first()).toContainText("Tennis (fictional)");
+});
+
+test("Average Lines lists average, best, worst and fair prices per game", async ({ page }) => {
+  await page.goto("/lines");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("2026");
+  const card = page.locator("article.card").filter({ hasText: "Football (fictional)" }).first();
+  await expect(card).toBeVisible();
+  await expect(card.getByText("Moneyline 2-way")).toBeVisible();
+  await expect(card.getByText("Spread", { exact: true })).toBeVisible();
+  await expect(card.getByText(/average across books/).first()).toBeVisible();
+  await expect(card.locator("thead").first()).toContainText("Fair (no margin)");
+  await noHorizontalOverflow(page);
+  await page.getByRole("link", { name: "Average Lines" }).first().isVisible();
+});
+
+test("Knowledge Center: search topics and use the calculators", async ({ page }) => {
+  await page.goto("/learn");
+  await page.getByLabel("Search topics").fill("odds format");
+  await expect(page.getByText("Odds formats: American, decimal, fractional")).toBeVisible();
+  const conv = page.getByLabel("Price (American, decimal or fractional)");
+  await conv.fill("+150");
+  const calc = page.locator(".card-tight").filter({ hasText: "Odds converter" });
+  await expect(calc.getByText("3/2", { exact: true })).toBeVisible();
+  await expect(calc.getByText("40.00%", { exact: true })).toBeVisible();
+  await conv.fill("+50");
+  await expect(page.getByText(/at least \+100 or at most -100/)).toBeVisible();
+  await page.getByLabel("Search topics").fill("arbitrage");
+  await expect(page.getByText(/Arbitrage: a guaranteed/)).toBeVisible();
+  await page.getByLabel("Search topics").fill("");
+  await page.getByRole("button", { name: "Expand all" }).click();
+  await expect(page.getByText(/1-800-GAMBLER/)).toBeVisible();
+  await noHorizontalOverflow(page);
+});
+
+test("Football game page shows spreads and totals with push chances", async ({ page }) => {
+  await page.goto("/games/demo-ft-2026-06-16-ELM-ISL");
+  await expect(page.getByRole("heading", { name: "Spreads and totals" })).toBeVisible();
+  await expect(page.locator("table").filter({ hasText: "Model win / push" }).first()).toBeVisible();
+  await noHorizontalOverflow(page);
 });

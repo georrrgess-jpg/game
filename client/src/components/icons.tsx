@@ -57,6 +57,27 @@ export const IconSettings = (p: P) => (
     <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
   </Svg>
 );
+export const IconValue = (p: P) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="8" />
+    <circle cx="12" cy="12" r="4.2" />
+    <circle cx="12" cy="12" r="0.9" fill="currentColor" />
+  </Svg>
+);
+export const IconLines = (p: P) => (
+  <Svg {...p}>
+    <path d="M4 6.5h16M4 12h16M4 17.5h16" />
+    <circle cx="9" cy="6.5" r="1.6" fill="currentColor" />
+    <circle cx="15" cy="12" r="1.6" fill="currentColor" />
+    <circle cx="11" cy="17.5" r="1.6" fill="currentColor" />
+  </Svg>
+);
+export const IconBook = (p: P) => (
+  <Svg {...p}>
+    <path d="M4.5 5.5c2.5-1.3 5-1.3 7.5 0v14c-2.5-1.3-5-1.3-7.5 0z" />
+    <path d="M12 5.5c2.5-1.3 5-1.3 7.5 0v14c-2.5-1.3-5-1.3-7.5 0" />
+  </Svg>
+);
 export const IconInfo = (p: P) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="9" />

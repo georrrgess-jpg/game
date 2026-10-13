@@ -1,20 +1,25 @@
 // Deterministic generator for the clearly labelled, entirely FICTIONAL demo world.
-// Two invented leagues (no real teams, players, books or news outlets):
+// Five invented leagues (no real teams, players, books or news outlets):
 //   - Continental Baseball Circuit: 2-way moneylines, with an independent model.
 //   - Meridian Football League: 3-way (home/draw/away) results, market-reference only.
+//   - Basketball, gridiron football and tennis leagues: see demo-sports.ts.
 // "Books" price games from a noisy view of the simulated truth that reacts to injury
 // news, so the demo can honestly show a market that is hard to beat.
 
 import { DateTime } from "luxon";
-import type { Repo, QuoteRecord, InjuryRecord, LineupRecord, NewsRecord, WeatherRecord, Dataset } from "./repo";
-import { americanToDecimal, decimalToAmerican, sigmoid } from "../shared/odds";
-import { contractId } from "../shared/contracts";
+import type { Repo, QuoteRecord, InjuryRecord, LineupRecord, NewsRecord, WeatherRecord } from "./repo";
+import { sigmoid } from "../shared/odds";
 import { hashString, mulberry32, normal, poisson } from "../shared/rng";
 import { dedupeKey } from "./news";
+import { DS, bookQuotes, days, plusMin, toUtc, weekday, demoSnapshotTimes, type Rand } from "./demo-common";
+import { generateDemoSports } from "./demo-sports";
 
-export const DEMO_VERSION = "demo-world-6";
+export { DEMO_SPORT_LEAGUES } from "./demo-sports";
+
+export { DEMO_BOOKS, demoSnapshotTimes } from "./demo-common";
+
+export const DEMO_VERSION = "demo-world-7";
 export const DEMO_SEED = 20260616;
-const DS: Dataset = "demo";
 const BB = "demo_baseball";
 const FB = "demo_soccer";
 export const DEMO_BASEBALL_LEAGUE = "Continental Baseball Circuit (fictional)";
@@ -49,124 +54,11 @@ const SOCCER_CLUBS = [
   { abbr: "JUN", name: "Juniper Vale" },
 ];
 
-export const DEMO_BOOKS = [
-  { key: "demo_northgate", title: "Northgate (demo book)", margin: 0.038, noise: 0.05, skip: 0.03, lag: 0 },
-  { key: "demo_lakeshore", title: "Lakeshore (demo book)", margin: 0.045, noise: 0.06, skip: 0.05, lag: 0 },
-  { key: "demo_summit", title: "Summit (demo book)", margin: 0.052, noise: 0.07, skip: 0.06, lag: 0 },
-  { key: "demo_bayview", title: "Bayview (demo book)", margin: 0.065, noise: 0.08, skip: 0.08, lag: 0.35 },
-];
 
 const FIRST = ["Marco", "Eli", "Tomas", "Jalen", "Ruben", "Owen", "Dario", "Kofi", "Luis", "Mateo", "Noah", "Ivan", "Samir", "Theo", "Hugo", "Felix", "Andre", "Kenji", "Rafael", "Milo", "Caleb", "Jonah", "Emil", "Pablo", "Victor", "Arlo", "Dmitri", "Nico", "Silas", "Bram"];
 const LAST = ["Reyes", "Okafor", "Lindqvist", "Marsh", "Delacroix", "Hart", "Navarro", "Achterberg", "Quill", "Brandt", "Castellano", "Ferro", "Gallo", "Ibarra", "Jansen", "Kowal", "Laurent", "Moreau", "Nakamura", "Oduya", "Petrov", "Rocha", "Sorensen", "Tavares", "Ueda", "Valdez", "Whitlock", "Yilmaz", "Zane", "Abernathy", "Birch", "Corwin"];
 const POSITIONS = ["C", "1B", "2B", "SS", "3B", "LF", "CF", "RF", "DH"];
 const BODY = ["hamstring strain", "oblique strain", "wrist soreness", "ankle sprain", "shoulder inflammation", "back tightness"];
-
-type Rand = () => number;
-
-function toUtc(localDate: string, time: string, zone: string): string {
-  return DateTime.fromISO(`${localDate}T${time}`, { zone }).toUTC().toISO({ suppressMilliseconds: true })!;
-}
-const plusMin = (iso: string, m: number) => new Date(Date.parse(iso) + m * 60000).toISOString().replace(/\.\d{3}Z$/, "Z");
-const days = (from: string, to: string) => {
-  const out: string[] = [];
-  let d = DateTime.fromISO(from, { zone: "UTC" });
-  const end = DateTime.fromISO(to, { zone: "UTC" });
-  while (d <= end) {
-    out.push(d.toISODate()!);
-    d = d.plus({ days: 1 });
-  }
-  return out;
-};
-const weekday = (date: string) => DateTime.fromISO(date, { zone: "UTC" }).weekday; // 1 = Monday
-
-function toAmericanRounded(p: number): number {
-  // Price p (already including margin) as American odds rounded to the nearest 5.
-  const d = 1 / Math.min(0.97, Math.max(0.03, p));
-  let a = decimalToAmerican(d);
-  a = Math.round(a / 5) * 5;
-  if (a > -100 && a < 100) a = a >= 0 ? 100 : -100;
-  return a;
-}
-
-/** Simulated retrieval schedule: fixed daily polls (UTC) plus two pre-game polls, from the opening line to the start. */
-const POLL_TIMES_UTC = ["00:30", "02:30", "04:30", "10:30", "12:30", "14:30", "16:30", "18:30", "20:30", "22:30"];
-/** Dense polling (every ~2 hours while people are awake) for the current season; three snapshots for past seasons. */
-export function demoSnapshotTimes(start: string, openMinutesBefore: number, cutoff: string | null, dense = true): string[] {
-  const open = plusMin(start, -openMinutesBefore);
-  const out = new Set<string>([open, plusMin(start, -75), plusMin(start, -20)]);
-  if (!dense) return [...out].filter((t) => !cutoff || t < cutoff).sort();
-  let day = DateTime.fromISO(open, { zone: "utc" }).startOf("day");
-  const end = DateTime.fromISO(start, { zone: "utc" });
-  while (day <= end) {
-    for (const hm of POLL_TIMES_UTC) {
-      const t = DateTime.fromISO(`${day.toISODate()}T${hm}:00`, { zone: "utc" }).toISO({ suppressMilliseconds: true })!;
-      if (t > open && t < plusMin(start, -20)) out.add(t);
-    }
-    day = day.plus({ days: 1 });
-  }
-  return [...out].filter((t) => !cutoff || t < cutoff).sort();
-}
-
-interface BookSnapshotInput {
-  rand: Rand;
-  eventId: string;
-  contract: "moneyline_2way_full_game" | "moneyline_3way_regulation";
-  outcomes: ("home" | "away" | "draw")[];
-  fairAt: (t: string) => number[]; // market's fair view at time t
-  snapshots: string[];
-}
-
-function bookQuotes(inp: BookSnapshotInput): QuoteRecord[] {
-  const out: QuoteRecord[] = [];
-  for (const book of DEMO_BOOKS) {
-    if (inp.rand() < book.skip) continue; // this book does not offer the market for this game
-    const bookBias = normal(inp.rand, 0, book.noise);
-    let lastSource: string | null = null;
-    let lastFair: number[] | null = null;
-    let dropped = false;
-    inp.snapshots.forEach((t, idx) => {
-      // A lagging book sometimes drops out of the feed: its last quote is never re-confirmed and goes stale.
-      if (!dropped && idx >= 2 && idx < inp.snapshots.length - 1 && inp.rand() < book.lag / 3) dropped = true;
-      if (dropped) return;
-      const fair = inp.fairAt(t);
-      // Books often leave a price unchanged between polls: keep the source time when nothing moved.
-      const unchanged = lastFair !== null && Math.abs(fair[0] - lastFair[0]) < 0.004;
-      lastFair = fair;
-      let probs: number[];
-      if (fair.length === 2) {
-        const pH = sigmoid(Math.log(fair[0] / fair[1]) + bookBias + normal(inp.rand, 0, 0.02));
-        probs = [pH, 1 - pH];
-      } else {
-        const tilt = Math.exp(bookBias);
-        const raw = [fair[0] * tilt, fair[1], fair[2] / tilt];
-        const s = raw.reduce((a, b) => a + b, 0);
-        probs = raw.map((x) => x / s);
-      }
-      const sourceTime = unchanged && lastSource ? lastSource : plusMin(t, -Math.floor(inp.rand() * 4));
-      lastSource = sourceTime;
-      inp.outcomes.forEach((o, i) => {
-        const american = toAmericanRounded(probs[i] * (1 + book.margin));
-        out.push({
-          dataset: DS,
-          event_id: inp.eventId,
-          provider: "demo",
-          book_key: book.key,
-          book_title: book.title,
-          contract: inp.contract,
-          contract_id: contractId(inp.contract, null),
-          provider_market: inp.contract === "moneyline_3way_regulation" ? "h2h (3-way)" : "h2h",
-          line: null,
-          outcome: o,
-          price_decimal: americanToDecimal(american),
-          source_time: sourceTime,
-          retrieved_at: t,
-          known_at: t,
-        });
-      });
-    });
-  }
-  return out;
-}
 
 interface InjurySpell {
   teamIdx: number;
@@ -528,6 +420,11 @@ export function generateDemoWorld(repo: Repo): { events: number; quotes: number 
         });
       });
     }
+
+    const more = generateDemoSports(repo);
+    eventCount += more.events;
+    for (const q of more.quotes) allQuotes.push(q);
+    for (const w of more.weather) weather.push(w);
 
     quoteCount = repo.insertQuotes(allQuotes, { skipDedupe: true });
     repo.insertInjuries(injuries);

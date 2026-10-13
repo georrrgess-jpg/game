@@ -6,7 +6,7 @@ export type LogLevel = "info" | "warn" | "error";
 export class ActivityLog {
   constructor(
     private db: Db,
-    private secrets: { oddsApiKey: string | null; anthropicApiKey: string | null },
+    private secrets: { oddsApiKey: string | null; anthropicApiKey: string | null; balldontlieApiKey?: string | null },
     private now: () => string = () => new Date().toISOString(),
   ) {}
 

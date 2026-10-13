@@ -2,14 +2,17 @@ import { useState, type ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { useApp } from "../state";
 import { fmtDateTime, utcToZonedLocal, zonedLocalToUtc } from "../format";
-import { BrandMark, IconClock, IconEvidence, IconGames, IconLab, IconMarket, IconPause, IconPlay, IconReport, IconSettings, IconToday, IconX } from "./icons";
+import { BrandMark, IconBook, IconClock, IconEvidence, IconGames, IconLab, IconLines, IconMarket, IconPause, IconPlay, IconReport, IconSettings, IconToday, IconValue, IconX } from "./icons";
 import { Modal, Toasts } from "./ui";
 
 const NAV = [
   { to: "/", label: "Today", icon: IconToday, end: true },
+  { to: "/value", label: "Value Finder", short: "Value", icon: IconValue },
+  { to: "/lines", label: "Average Lines", short: "Lines", icon: IconLines },
   { to: "/games", label: "Games", icon: IconGames },
   { to: "/markets", label: "Market Explorer", short: "Markets", icon: IconMarket },
   { to: "/evidence", label: "Evidence", icon: IconEvidence },
+  { to: "/learn", label: "Knowledge Center", short: "Learn", icon: IconBook },
   { to: "/lab", label: "Classroom Lab", short: "Lab", icon: IconLab },
   { to: "/report", label: "Model Report", short: "Report", icon: IconReport },
   { to: "/settings", label: "Settings", icon: IconSettings },

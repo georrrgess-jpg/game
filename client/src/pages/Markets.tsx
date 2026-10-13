@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { qs, type Analysis, type Board, type Outcome } from "../api";
 import { useApi, useApp } from "../state";
-import { fmtTime, formatPct, localDate } from "../format";
+import { fmtTime, formatPct, localDate, atWord } from "../format";
 import { Callout, Empty, ErrorBox, FictionalNote, Loading } from "../components/ui";
 import { HistoryCard, QuotesTable } from "./Game";
 import { americanToDecimal, parseAmerican, proportionalNoVig } from "../../../shared/odds";
@@ -46,7 +46,7 @@ export default function MarketsPage() {
                     onClick={() => setSelected(i.eventId)}
                   >
                     <span>
-                      {i.awayAbbr ?? i.away} at {i.homeAbbr ?? i.home}
+                      {i.awayAbbr ?? i.away} {atWord(i.sport)} {i.homeAbbr ?? i.home}
                       <span className="small" style={{ display: "block", color: "inherit" }}>
                         {fmtTime(i.start, zone)} · {i.booksCurrent}/{i.booksTotal} current
                       </span>
@@ -64,7 +64,7 @@ export default function MarketsPage() {
                   <div className="card-head">
                     <h2>
                       <Link to={`/games/${encodeURIComponent(a.event.id)}`}>
-                        {a.event.away_name} at {a.event.home_name}
+                        {a.event.away_name} {atWord(a.event.sport_key)} {a.event.home_name}
                       </Link>
                     </h2>
                     <span className="chip">{a.market.label}</span>

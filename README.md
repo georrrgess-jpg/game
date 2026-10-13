@@ -1,7 +1,8 @@
 # Overround Lab
 
 A sports forecasting and market-analysis studio for classrooms. It shows how forecasts, market
-prices, bookmaker margin, uncertainty and new information fit together.
+prices, bookmaker margin, uncertainty and new information fit together, for **MLB, NBA, NFL and
+ATP/WTA tennis** (plus market-only views for any other sport The Odds API covers).
 **Simulation points only:** there are no deposits, no sportsbook logins, no wagering, no affiliate
 links and no staking advice. "Insufficient evidence" and "no credible difference from the market"
 are normal, expected results.
@@ -21,7 +22,9 @@ npm start          # builds the client and server, then serves http://127.0.0.1:
 ```
 
 Open **http://127.0.0.1:5180**. On first start the app generates the fictional demo world
-(about 5 seconds, roughly 60 MB in `./data`).
+(about 15 seconds, roughly 120 MB in `./data`) and then fits the models in the background (a few
+more seconds). Upgrading from an earlier version regenerates the demo world automatically; saved
+forecasts are kept.
 
 | Command | What it does |
 |---|---|
@@ -48,11 +51,14 @@ frozen information time) or **CONNECTED DATA**. Switch between Demo and Connecte
 | Area | What it is for |
 |---|---|
 | **Today** | **Analyze Today** refreshes connected providers within your caps (demo: recomputes as of the demo clock), records the day's estimates, and shows three separate views: *Most likely outcomes*, *Highest quoted price* for a chosen outcome, and *Model vs market*. Filters cover sport, league, start time, market, quote freshness and data completeness. Every game shows its as-of time, coverage, probability, evidence summary and an uncertainty statement. CSV export and print are available. |
-| **Games** | Search by team and open the **game workspace**: raw implied, margin-adjusted market, independent model (with an approximate 80% range), combined estimate, per-book quote table, quote history chart (with a table view), injuries, lineups, conflicts, source-linked news, weather, a five-question plain-language explanation with source IDs, and **what-if** controls kept visibly separate from confirmed facts. |
+| **Value Finder** | Today's outcomes ranked by **estimated chance of winning** (with the best price and its break-even chance next to it), and, separately, **price discrepancies**: prices that beat the margin-free consensus of at least 3 books by 1% or more (grade B), model edges only where the model has beaten the market out of sample (grade C), **arbitrage** sets (grade A) and clearly labelled *unproven model ideas* (grade D). A **track record** tab backtests each rule on this season's finished games with 95% intervals and closing line value. No quotas, no "locks": an empty list is a normal answer. |
+| **Average Lines** | For every game: the average moneyline, spread and total across books (averaged correctly, on the probability scale), the best and worst price with the book, the margin-free fair price, the average spread/total line and the range of lines offered, and the average bookmaker margin. |
+| **Games** | Search by team and open the **game workspace**: raw implied, margin-adjusted market, independent model (with an approximate 80% range), combined estimate, per-book quote table, **spreads and totals** priced from the model's margin and total distributions (with push chances on whole-number lines and a sharpened model + market estimate), quote history chart (with a table view), injuries, lineups, conflicts, source-linked news, weather, a five-question plain-language explanation with source IDs, and **what-if** controls kept visibly separate from confirmed facts. |
 | **Market Explorer** | Equivalent contracts across books, each book's margin, price movement, and a margin calculator. |
 | **Evidence** | News (official / report / speculation, duplicates grouped), injuries, lineups (unknown stays unknown) and conflicting reports. |
 | **Classroom Lab** | Students forecast **before** results are known (model and market can be hidden to avoid anchoring), forecasts are immutable and timestamped, results are revealed later and scored with Brier score and log loss against the model and market on the same games. There is a points-only notebook (100 simulation points per experiment), explainers (probability vs confidence, odds and margin, calibration, EV with pushes, a variance simulator) and instructor controls (demo clock, hide results, new session). |
-| **Model Report** | Chronological train / validation / holdout splits, Brier and log loss against baselines and the market, paired-bootstrap intervals, calibration charts, the saved forward record (abstentions included) and limitations. |
+| **Knowledge Center** | 36 short explainers grouped into prices and probability, value, markets, models, judging forecasts and thinking clearly, with working calculators: odds converter (American, decimal, fractional), four margin-removal methods side by side, EV with pushes, Kelly (theory only), parlays with the correlation warning, arbitrage, hedging, closing line value, a break-even table, a luck-versus-skill season simulator, and responsible-gambling information. |
+| **Model Report** | Per sport: chronological train / validation / holdout splits, Brier and log loss against baselines and the market, paired-bootstrap intervals, calibration charts, **spread and total** accuracy against the market, the **market reference settings** (which margin-removal method and book weights were learned, with the evidence), the saved forward record (abstentions included) and limitations. |
 | **Settings** | Providers (coverage, licensing, health, quotas, connection test), cost caps, scheduler (pause/resume, run now, last and next run, activity log), time zone, freshness and threshold settings, theme, motion, text size and contrast. |
 
 **A typical class with the demo:** the demo clock starts on Tue 16 Jun 2026 at 11:00 in New York.
@@ -66,8 +72,11 @@ Use *Replay a past moment* to replay any earlier day the same way.
 
 | Feature | Without any key | Needs |
 |---|---|---|
-| Demo world, Today board, game workspaces, what-ifs, Lab, Report, explainers, exports | ✅ fully offline | — |
+| Demo world (baseball, soccer, basketball, football, tennis), Today board, Value Finder, Average Lines, Knowledge Center, game workspaces, what-ifs, Lab, Report, exports | ✅ fully offline | — |
 | MLB schedules, official results, probable pitchers, posted lineups, injured lists, model history | ✅ enable **MLB Stats API** in Settings | internet |
+| NFL schedules, results and closing lines, model history | ✅ enable **nflverse** in Settings | internet |
+| Tennis (or any sport's) results history from a file you downloaded | ✅ **Settings → Import results (CSV)** | a results file |
+| NBA schedules and results, model history | — | free `BALLDONTLIE_API_KEY` |
 | Venue weather | ✅ enable **Open-Meteo** | internet |
 | News headlines | ✅ enable **News feeds** and list feed URLs | internet |
 | Market quotes (any sport The Odds API covers), recent scores for odds-only sports | — | `ODDS_API_KEY` |
@@ -95,10 +104,43 @@ and the sports and books actually observed on your installation.
 - **The model needs two completed seasons before the forecast season.** Analyze Today imports the
   configured history (default: two previous seasons plus the current one, cached for a week).
 
+### nflverse: NFL schedules, results and closing lines (no key)
+- Downloads the community-maintained `games.csv` from the nflverse/nfldata repository (one file,
+  cached for 12 hours) and imports the current season plus the number of earlier seasons you choose
+  (default 3). Relocated franchises map to today's team (OAK → Las Vegas, SD → LA Chargers, STL → LA
+  Rams). `spread_line` in that file is positive when the home team is favoured, so it is stored as the
+  home line `−spread_line`.
+- Closing moneyline, spread and total are stored as quotes **60 minutes before kick-off**, so they
+  can serve as the market reference when the model is evaluated. That timestamp is slightly
+  optimistic for the market; the Model Report's comparison is therefore conservative for the model.
+- Check the nflverse repository's licence and attribution requirements before redistributing data.
+
+### balldontlie: NBA schedules and results (free key)
+- Put `BALLDONTLIE_API_KEY=...` in `.env` (the key is sent in the `Authorization` header and is
+  redacted from logs). Enable it in Settings and press **Import history now**. The free tier allows
+  about 5 requests a minute, so a season (about 15 pages) takes a few minutes; the app spaces requests
+  automatically (set your plan's limit in Settings).
+- The daily refresh also fetches the schedule and results around today.
+
+### Results files (CSV import, no network)
+**Settings → Import results (CSV)** accepts files you downloaded yourself (up to 19 MB):
+- **tennis-data.co.uk** season files saved as CSV (Date, Surface, Best of, Winner, Loser, Wsets,
+  Lsets, Comment, and PSW/PSL, AvgW/AvgL closing odds when present). Retirements and walkovers are
+  skipped. The two players are listed alphabetically (tennis has no home side). Closing odds are stored
+  60 minutes before an approximate noon start.
+- A **generic** format for any sport: `date, home, away, home_score, away_score` and optionally
+  `time` (UTC), `neutral`, `surface`, `best_of`.
+
+Imported games are matched to games already in the database (same teams, start within 2.5 hours, or
+the same day for date-only files) so odds stay attached, and re-importing is idempotent.
+
 ### The Odds API (v4): market quotes
 1. Get a key at the-odds-api.com and put `ODDS_API_KEY=...` in `.env`. Restart.
-2. In Settings set the sport keys (e.g. `baseball_mlb`, `icehockey_nhl`, `soccer_epl`), regions,
-   markets, and a **daily credit cap** and **minimum remaining credits**. Defaults: `h2h`, `us`, cap 30.
+2. In Settings set the sport keys (e.g. `baseball_mlb`, `basketball_nba`, `americanfootball_nfl`,
+   `soccer_epl`), regions, markets (add `spreads` and `totals` for basketball and football lines),
+   and a **daily credit cap** and **minimum remaining credits**. Defaults: `h2h`, `us`, cap 30.
+   Each tennis tournament is its own key (e.g. `tennis_atp_wimbledon`); tick **Also refresh every
+   active tennis tournament** to follow the tour automatically (each tournament costs credits).
 3. Press **Test connection**. It calls `/v4/sports`, which the docs say is free, and lists the active
    sports for your key.
 
@@ -110,8 +152,12 @@ locally before they would exceed your caps. A 401 quota response pauses paid cal
 connection test shows credits again.
 
 MLB quotes attach only to official MLB schedule events (matched by team aliases and start time,
-which handles doubleheaders), so enable the MLB Stats API too. For other sports, events are created
-from the odds feed itself and settled from its scores endpoint.
+which handles doubleheaders), so enable the MLB Stats API too. For NFL and NBA, quotes attach to the
+nflverse or balldontlie schedule event when there is one; otherwise the event comes from the odds
+feed itself and is settled from its scores endpoint. Tennis tournaments share one ATP or WTA player
+list (so ratings follow players across tournaments); names like "Novak Djokovic" also match
+"Djokovic N." from results files. Tennis results come from imported files, not from the scores
+endpoint.
 
 ### Open-Meteo: weather (no key)
 Hourly forecast at the venue's coordinates (MLB venues), outdoor venues only. The free tier is for
@@ -138,10 +184,11 @@ changes a number.
 
 - **"All sportsbooks" is not a coverage claim.** Prices are always the *highest quoted price among
   connected sources as of [time]*. The books seen per sport are listed in Settings after a refresh.
-- **Independent model:** MLB and the demo baseball league, 2-way moneyline only. Every other sport
-  and market (soccer 1X2, NHL, NBA, spreads, totals) shows the **market reference only**, labelled
-  "no independent forecast available". Spreads and totals are shown for comparison by exact line and
-  are never modelled.
+- **Independent model:** MLB, NBA, NFL and ATP/WTA tennis (and the fictional baseball, basketball,
+  football and tennis leagues): 2-way moneylines, plus spreads and totals for basketball and football.
+  It needs two completed seasons of results before the season being forecast (import them first).
+  Soccer 1X2, NHL and other sports show the **market reference only**, labelled "no independent
+  forecast available". Tennis spreads and totals (games handicaps) are not modelled.
 - **Contracts are never mixed:** soccer `h2h` is treated as 3-way regulation time (draw included).
   US-sport `h2h` is treated as full game including overtime, and `h2h_3_way` as regulation-only.
   Bookmaker rules can differ, so check them if precision matters.
@@ -170,24 +217,56 @@ changes a number.
 0 and |A| < 100 are rejected, as are malformed or non-finite values. The raw implied probability
 is q = 1/d.
 
-**Market reference.** For each book's complete, same-time outcome set: p_i = q_i / Σq (proportional
-margin removal, an approximation, not the true probability). Across books, the consensus is the
-median of each book's adjusted probability, renormalised. Best prices from different books are
-never combined. A quote is *current* if it was re-confirmed within the stale limit (default
-150 minutes, set to cover the default 120-minute odds refresh).
+**Market reference.** Each book's complete, same-time outcome set has its margin removed with one of
+four methods: proportional (p_i = q_i / Σq), power (p_i = q_i^k), Shin (a share z of informed money)
+or odds ratio. All are approximations of the market's view, not the true probability. **Per sport,
+the method is chosen on the previous completed season** (lowest log loss of the consensus 60 minutes
+before each start; the default, Shin, is kept unless another method is better by a visible margin).
+Across books, the consensus is the median of each book's adjusted probabilities, renormalised; if
+**book weights** learned on the first half of that season also improve its second half, a weighted
+average is used instead (books that tracked results better count more). Nothing from the forecast
+season is used. Best prices from different books are never combined. A quote is *current* if it was
+re-confirmed within the stale limit (default 150 minutes, set to cover the default 120-minute odds
+refresh).
 
 **Simulation EV** per 1-point stake: p·d − 1 (= p·(d−1) − (1−p)). The break-even probability is 1/d.
 With pushes: p_win·(d−1) − p_loss. A void returns the stake.
 
-**Independent model (`elo-logit-v1`).** Elo team ratings (K, home bonus and between-season carry-over
-chosen by grid search) feed a logistic regression on home advantage, rating difference and rest-day
-difference. A factor is kept only if it improves validation log loss; in the demo, rest is dropped.
-Weights are learned by maximum likelihood on seasons **before** the forecast season only. Ratings
-use only games completed before the information time. The 80% range comes from the weights'
-covariance (delta method). It reflects parameter uncertainty only and understates total uncertainty.
+**Independent model (`rating-logit-v2`).** A rating system per sport feeds a logistic regression:
+- baseball: Elo; basketball and football: Elo with a margin-of-victory multiplier
+  (ln(|margin|+1) × 2.2 / (0.001 × winner's Elo edge + 2.2)), so blowouts move ratings more and
+  favourites' wins move them less;
+- tennis: player Elo with an experience-dependent K (250 / (matches + 5)^0.4, scaled), separate hard,
+  clay and grass ratings blended with the overall rating, and no home advantage.
+
+Candidate inputs are home advantage, rating difference, rest-day difference, back-to-back
+difference (basketball) and a best-of-five interaction (tennis). K, home bonus, carry-over and the
+surface blend are chosen by grid search on a validation season, and an input is kept only if it
+improves validation log loss. Weights are learned by maximum likelihood on seasons **before** the
+forecast season only. Ratings use only games completed before the information time. The 80% range
+comes from the weights' covariance (delta method). It reflects parameter uncertainty only and
+understates total uncertainty.
+
+**Spreads and totals.** The expected margin is a least-squares fit on home advantage and rating
+difference; the expected total uses both teams' recent points scored and allowed (exponentially
+smoothed, shrunk towards the league average each new season). Around these means the app builds a
+discrete distribution over whole points: a Normal curve multiplied by **key-number weights** learned
+from past games (observed ÷ expected frequency, shrunk with a pseudo-count, pooled for ±m). That
+gives the chance of winning, pushing and losing at any line, so EV with pushes is exact for the
+model. A **sharpened** estimate blends the model's mean with the mean implied by the market's own
+line and price; the blend weight is chosen on the validation season (0 when the market is better).
 
 **Combined estimate:** a logistic blend of model and market fitted on the validation season. It is
 labelled as using market odds.
+
+**Value Finder grades.** A: arbitrage, the best prices for every outcome of one contract (same line)
+imply less than 100% in total. B: a price beats the margin-free consensus of at least 3 books by 1% or
+more (price × consensus probability − 1 ≥ 0.01). C: the model or combined estimate sees at least 1%
+EV and the model–market verdict is a research lead (validated out of sample). D: only an unvalidated
+estimate sees value. The **backtest** applies rule B, and a "back the favourite" baseline, to this
+season's finished games at the quotes known 75 minutes before each start, settles them with the
+contract rules, and reports return per point and closing line value (price taken × margin-free
+closing probability − 1, closing = 20 minutes before the start), each with a 95% bootstrap interval.
 
 **Model–market verdicts:** a gap is a *research lead* only if (1) the model beat the market **out of
 sample** (95% paired-bootstrap interval of the log-loss difference below 0 on at least 200 of this
@@ -197,31 +276,36 @@ season is used, but because the model's settings were chosen on it, the best pos
 *insufficient evidence*. Otherwise the verdict is *no credible difference*. The board never fills a
 quota.
 
-### Evaluation results (fictional demo league; methods are real, data is simulated)
+### Evaluation results (fictional demo leagues; methods are real, data is simulated)
 
-Train 2024 (800 games after a 120-game burn-in), validation 2025 (921 games), final holdout 2026.
-Lower is better.
+Holdout = the 2026 season up to the demo start (16 Jun 2026); parameters were fixed on 2024–2025
+(football also uses 2023). Log loss, lower is better; market = consensus 60 minutes before the start.
 
-| As of the demo start (16 Jun 2026), holdout n = 382 | Brier | Log loss |
-|---|---|---|
-| Independent model | 0.2403 | 0.6737 |
-| Home-win-rate baseline | 0.2469 | 0.6870 |
-| Coin flip | 0.2500 | 0.6931 |
-| Market reference (60 min pre-game) | **0.2310** | **0.6541** |
-| Combined (uses market) | 0.2328 | 0.6582 |
+| Sport (holdout games) | Model | Home-rate baseline | Coin flip | Market | Combined |
+|---|---|---|---|---|---|
+| Baseball (382) | 0.6737 | 0.6870 | 0.6931 | **0.6537** | 0.6579 |
+| Basketball (181) | 0.6712 | 0.6884 | 0.6931 | **0.6396** | 0.6430 |
+| Football (80) | 0.6175 | 0.6933 | 0.6931 | **0.6025** | 0.6104 |
+| Tennis (337) | 0.6564 | 0.7048 | 0.6931 | **0.6318** | 0.6363 |
 
-- Model minus market log loss: +0.020 (95% interval +0.005 to +0.034), so **the model is worse than
-  the market**. On validation the gap (+0.006, −0.005 to +0.017) was not significant. Every
-  model–market gap on the demo board is therefore labelled *no credible difference*.
-- Model minus home-rate baseline: −0.013 (−0.029 to +0.003), so no clear advantage over the
-  baseline yet. Over the full simulated 2026 season (n = 921) it is −0.017 (−0.030 to −0.003).
-- Hypothetical points (1 point wherever model EV > 0): −18.5 over 350 stakes, a negative result
-  reported as is.
+- In every sport the model clearly beats the baselines and clearly trails the market, which sees
+  injuries, starters and news the model does not. Every model–market gap on the demo board is
+  therefore *no credible difference* or *insufficient evidence*; that is the intended lesson.
+- Spreads and totals (basketball, main line, pushes excluded): model 0.733 / 0.699 vs market
+  0.695 / 0.694. The sharpened blends chose 0–10% model weight on validation, i.e. they mostly
+  defer to the market, and match it on the holdout.
+- Market settings learned on 2025: Shin's method for baseball, basketball and football, proportional
+  for tennis (the methods differ by less than 0.002 log loss); accuracy-weighted books were used for
+  tennis only, where they helped on the held-back half of 2025.
 - 3-way demo soccer, market only (n = 110): Brier 0.591 vs 0.667 uniform and 0.625 outcome frequency.
+- Value Finder backtest to the demo start: the grade-B rule took 372 selections with a mean closing
+  line value of +3.9% (interval clearly above 0) but a return of +8% whose 95% interval runs from
+  about −7% to +24%, i.e. consistent with luck; backing every favourite returned +0.6% (−4% to +5%)
+  with negative closing line value (−1.6%). In the simulator the books' errors are independent,
+  which is kinder than real markets, where outlying prices move quickly and winners get limited.
 
-This is the intended lesson: the market sees starting pitchers and injuries that the model does
-not. With real MLB data you get the same report for your seasons once two are imported. If there is
-too little history, the app says so instead of producing a backtest.
+With real data you get the same report once two seasons are imported. If there is too little
+history, the app says so instead of producing a backtest.
 
 ---
 
@@ -262,16 +346,27 @@ Claude Code session is not a background worker for this app.
 
 ## 9. What was tested, and what needs live credentials
 
-`npm test`: **97 tests** across 6 files, all passing in the build environment. Covers:
+`npm test`: **140 tests** across 9 files, all passing in the build environment. Covers:
 - odds math (positive and negative American odds, ±100, round-trips, malformed and zero quotes,
-  3-way margin, EV with and without pushes, half-up rounding),
+  3-way margin, EV with and without pushes, half-up rounding), the four margin-removal methods,
+  fractional odds, Kelly, arbitrage stake splits, parlays, hedging and closing line value,
+- the multi-sport model: sport configurations, seasons that cross New Year, margin-of-victory
+  multiplier, back-to-back features, discrete distributions (probabilities sum to 1, pushes only on
+  whole-number lines, key numbers), the market-implied mean, football key-number learning, tennis
+  without home advantage, and market settings learned only from completed earlier seasons,
+- Value Finder invariants (no started games, sorted by probability, grade B thresholds exact,
+  arbitrage payouts equal), average lines on the probability scale, a deterministic backtest, and
+  tennis draws that reveal later rounds only after earlier rounds finish,
 - settlement (overtime vs regulation, draws, pushes on lines, void, suspended), equivalent-contract
   matching,
 - DST days (23 h and 25 h), games crossing local midnight, southern-hemisphere and non-hour offsets,
 - stale, incomplete and mismatched-time quotes, after-start exclusion, never mixing books,
 - **leakage** (future quotes, injuries, news and results cannot change an analysis; parameters
   never use the forecast season; started games are frozen at start) and deterministic replay,
-- provider contract tests against recorded-format responses (Odds API odds, scores and historical;
+- provider contract tests against recorded-format responses (nflverse games.csv with relocated
+  teams, neutral sites and closing lines; balldontlie paging, rate spacing and key handling;
+  tennis-data.co.uk and generic CSV imports; Odds API NFL quotes attaching to the nflverse schedule
+  and tennis tournaments sharing one player list; Odds API odds, scores and historical;
   MLB teams, schedule with make-up, doubleheader, Game Over, suspended, and roster; Open-Meteo;
   RSS and Atom), quota exhaustion, invalid keys, credit caps, 429/5xx retries, caching and
   de-duplication, partial outages, SSRF and allow-list checks, secret redaction,
@@ -285,9 +380,11 @@ Claude Code session is not a background worker for this app.
   stale, out-of-range information times, play-off soccer leagues, the doubleheader matching window,
   postponed originals kept for replay, and venue data surviving history imports.
 
-`npm run test:e2e`: **16 Playwright tests** (desktop 1366×900 and Pixel 7), all passing: Analyze
+`npm run test:e2e`: **24 Playwright tests** (desktop 1366×900 and Pixel 7), all passing: Analyze
 Today with keyboard tab navigation, game workspace with what-if, the full forecast → advance day →
-reveal → score loop, replay and connected labels, every page without horizontal overflow,
+reveal → score loop, replay and connected labels, Value Finder views and track record, Average
+Lines, Knowledge Center search and calculators, a football game's spreads and totals, every page
+without horizontal overflow,
 skip-link focus, theme and reduced-motion preferences, **a clean browser console** asserted in every
 test, and an **axe-core accessibility audit of every page in the dark and light themes with zero
 violations** (contrast, heading order, keyboard-reachable scroll regions, labels).
@@ -296,6 +393,9 @@ violations** (contrast, heading order, keyboard-reachable scroll regions, labels
 |---|---|---|---|
 | The Odds API v4 (odds, scores, sports, historical) | ✅ | ✅ | ❌ needs `ODDS_API_KEY` and network |
 | MLB Stats API | ✅ | ✅ | ❌ network blocked in build environment |
+| nflverse games.csv | ✅ | ✅ | ❌ network blocked |
+| balldontlie (NBA) | ✅ | ✅ | ❌ needs `BALLDONTLIE_API_KEY` and network |
+| CSV results import | ✅ | ✅ | works offline |
 | Open-Meteo | ✅ | ✅ | ❌ network blocked |
 | RSS/Atom feeds | ✅ | ✅ | ❌ network blocked; confirm default feed URL |
 | Anthropic API explanations | ✅ | output validation tested | ❌ needs `ANTHROPIC_API_KEY` |
@@ -323,9 +423,10 @@ Windows/macOS launch (the code is cross-platform; tested on Linux with Node 22).
 ## Project layout
 
 ```
-shared/     odds math, contracts, settlement, scoring and calibration, time zones (used by server and client)
-server/     Fastify app, SQLite repo (as-of queries), model, analysis, board, classroom, evaluation,
-            scheduler, ingest, providers/ (oddsapi, mlb, openmeteo, rss), demo world generator, AI layer
+shared/     odds and betting math, contracts, settlement, scoring and calibration, time zones (server and client)
+server/     Fastify app, SQLite repo (as-of queries), model, market, analysis, board, value finder,
+            classroom, evaluation, scheduler, ingest, providers/ (oddsapi, mlb, results: nflverse,
+            balldontlie and CSV import, openmeteo, rss), demo world generators, AI layer
 client/     React app (pages/, components/), styles
 tests/      unit/ (Vitest), e2e/ (Playwright), fixtures/ (recorded-format provider responses)
 docs/       PLAN.md: stack choice, milestones, design rules

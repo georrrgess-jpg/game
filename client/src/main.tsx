@@ -17,6 +17,9 @@ const EvidencePage = lazy(() => import("./pages/Evidence"));
 const LabPage = lazy(() => import("./pages/Lab"));
 const ReportPage = lazy(() => import("./pages/Report"));
 const SettingsPage = lazy(() => import("./pages/Settings"));
+const ValuePage = lazy(() => import("./pages/Value"));
+const LinesPage = lazy(() => import("./pages/Lines"));
+const LearnPage = lazy(() => import("./pages/Learn"));
 
 function RouteFocus() {
   const { pathname } = useLocation();
@@ -38,6 +41,9 @@ function App() {
           <Suspense fallback={<Loading />}>
             <Routes>
               <Route path="/" element={<TodayPage />} />
+              <Route path="/value" element={<ValuePage />} />
+              <Route path="/lines" element={<LinesPage />} />
+              <Route path="/learn" element={<LearnPage />} />
               <Route path="/games" element={<GamesPage />} />
               <Route path="/games/:id" element={<GamePage />} />
               <Route path="/markets" element={<MarketsPage />} />

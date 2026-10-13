@@ -13,12 +13,13 @@ for (const theme of ["dark", "light"] as const) {
     await page.goto("/");
     await expect(page.locator(".game-card").first()).toBeVisible();
     const gameHref = await page.locator(".teams a").first().getAttribute("href");
-    const pages = ["/", "/games", "/markets", "/evidence", "/lab", "/report", "/settings", gameHref!];
+    const pages = ["/", "/value", "/lines", "/learn", "/games", "/markets", "/evidence", "/lab", "/report", "/settings", gameHref!, "/games/demo-ft-2026-06-16-ELM-ISL"];
     const problems: string[] = [];
     for (const p of pages) {
       await page.goto(p);
       await expect(page.locator("h1")).toBeVisible();
       await page.waitForLoadState("networkidle");
+      if (p === "/learn") await page.getByRole("button", { name: "Expand all" }).click(); // audit the calculators too
       await page.addScriptTag({ content: AXE });
       const violations = await page.evaluate(async () => {
         const r = await (window as any).axe.run(document, { resultTypes: ["violations"] });

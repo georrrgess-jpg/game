@@ -98,6 +98,11 @@ export function sportLabel(key: string): string {
   const map: Record<string, string> = {
     demo_baseball: "Baseball (fictional)",
     demo_soccer: "Soccer (fictional)",
+    demo_basketball: "Basketball (fictional)",
+    demo_football: "Football (fictional)",
+    demo_tennis: "Tennis (fictional)",
+    tennis_atp: "Tennis (ATP)",
+    tennis_wta: "Tennis (WTA)",
     baseball_mlb: "MLB",
     basketball_nba: "NBA",
     americanfootball_nfl: "NFL",
@@ -105,3 +110,6 @@ export function sportLabel(key: string): string {
   };
   return map[key] ?? key.replace(/_/g, " ");
 }
+
+/** "at" for team sports (away at home); "vs" for tennis, where home and away are only list order. */
+export const atWord = (sport: string | null | undefined) => (sport && sport.includes("tennis") ? "vs" : "at");

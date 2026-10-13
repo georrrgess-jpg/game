@@ -8,6 +8,8 @@ import { OddsApiProvider } from "./providers/oddsapi";
 import { MlbProvider } from "./providers/mlb";
 import { OpenMeteoProvider } from "./providers/openmeteo";
 import { RssProvider } from "./providers/rss";
+import { BalldontlieProvider, NflverseProvider } from "./providers/results";
+import { seasonOf } from "../shared/contracts";
 
 export interface StepResult {
   step: string;
@@ -22,6 +24,8 @@ export class LiveIngest {
   readonly mlb: MlbProvider;
   readonly weather: OpenMeteoProvider;
   readonly rss: RssProvider;
+  readonly nflverse: NflverseProvider;
+  readonly balldontlie: BalldontlieProvider;
   private running: Promise<StepResult[]> | null = null;
   private runningDate: string | null = null;
 
@@ -30,6 +34,21 @@ export class LiveIngest {
     this.mlb = new MlbProvider(deps);
     this.weather = new OpenMeteoProvider(deps);
     this.rss = new RssProvider(deps);
+    this.nflverse = new NflverseProvider(deps);
+    this.balldontlie = new BalldontlieProvider(deps);
+  }
+
+  /** NFL seasons to import: the current season (by start year) and the configured number before it. */
+  nflSeasons(localDate: string): number[] {
+    const cur = Number(seasonOf("americanfootball_nfl", `${localDate}T12:00:00Z`));
+    const n = this.deps.settings().providers.nflverse.historySeasons;
+    return Array.from({ length: n + 1 }, (_, i) => cur - n + i);
+  }
+
+  nbaSeasons(localDate: string): { seasons: number[]; current: number } {
+    const cur = Number(seasonOf("basketball_nba", `${localDate}T12:00:00Z`));
+    const n = this.deps.settings().providers.balldontlie.historySeasons;
+    return { seasons: Array.from({ length: n + 1 }, (_, i) => cur - n + i), current: cur };
   }
 
   private async step(name: string, provider: string, fn: () => Promise<string>): Promise<StepResult> {
@@ -82,8 +101,30 @@ export class LiveIngest {
       results.push({ step: "MLB schedule", provider: "mlb", ok: false, skipped: true, detail: "MLB Stats API disabled in Settings." });
     }
 
+    if (s.providers.nflverse.enabled) {
+      results.push(
+        await this.step("NFL schedule and results", "nflverse", async () => {
+          const r = await this.nflverse.importSeasons(this.nflSeasons(localDate));
+          return `${r.games} games (${r.created} new), ${r.quotes} closing quotes, seasons ${r.seasons.join(", ")}`;
+        }),
+      );
+    }
+    if (s.providers.balldontlie.enabled) {
+      results.push(
+        await this.step("NBA history", "balldontlie", async () => {
+          const { seasons, current } = this.nbaSeasons(localDate);
+          const r = await this.balldontlie.importSeasons(seasons.filter((x) => x < current), current);
+          return `${r.games} games across ${r.seasons.join(", ")}`;
+        }),
+      );
+      results.push(
+        await this.step("NBA schedule", "balldontlie", async () => `${(await this.balldontlie.refreshRange(addDaysToDate(localDate, -2), addDaysToDate(localDate, 1))).games} games`),
+      );
+    }
+
     if (parts.odds !== false) {
-      for (const sport of s.providers.oddsapi.sports) {
+      const oddsSports = s.providers.oddsapi.enabled ? await this.odds.sportsToRefresh() : s.providers.oddsapi.sports;
+      for (const sport of oddsSports) {
         results.push(
           await this.step(`Odds: ${sport}`, "oddsapi", async () => {
             const r = await this.odds.refreshOdds(sport);
@@ -96,7 +137,8 @@ export class LiveIngest {
             return `${r.events} events, ${r.quotes} new quotes, ${r.unmatched} unmatched${hint}, books: ${r.books.join(", ") || "none"}`;
           }),
         );
-        if (sport !== "baseball_mlb") {
+        // MLB results come from the official feed; tennis results from imported files (score coverage for tennis is limited).
+        if (sport !== "baseball_mlb" && !sport.startsWith("tennis")) {
           results.push(await this.step(`Scores: ${sport}`, "oddsapi", async () => `${(await this.odds.refreshScores(sport)).updated} results updated`));
         }
       }
@@ -126,7 +168,8 @@ export class LiveIngest {
 
   async refreshOddsOnly(): Promise<StepResult[]> {
     const out: StepResult[] = [];
-    for (const sport of this.deps.settings().providers.oddsapi.sports) {
+    const sports = this.deps.settings().providers.oddsapi.enabled ? await this.odds.sportsToRefresh() : this.deps.settings().providers.oddsapi.sports;
+    for (const sport of sports) {
       out.push(await this.step(`Odds: ${sport}`, "oddsapi", async () => {
         const r = await this.odds.refreshOdds(sport);
         return `${r.events} events, ${r.quotes} new quotes`;
@@ -144,7 +187,11 @@ export class LiveIngest {
         return `${r.events} games checked`;
       }));
     }
-    for (const sport of s.providers.oddsapi.sports.filter((x) => x !== "baseball_mlb")) {
+    if (s.providers.balldontlie.enabled) {
+      out.push(await this.step("NBA results", "balldontlie", async () => `${(await this.balldontlie.refreshRange(addDaysToDate(localDate, -2), localDate)).games} games checked`));
+    }
+    const oddsSports = s.providers.oddsapi.enabled ? await this.odds.sportsToRefresh() : s.providers.oddsapi.sports;
+    for (const sport of oddsSports.filter((x) => x !== "baseball_mlb" && !x.startsWith("tennis"))) {
       out.push(await this.step(`Scores: ${sport}`, "oddsapi", async () => `${(await this.odds.refreshScores(sport)).updated} results updated`));
     }
     return out;

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, qs, type Analysis, type MarketView, type Outcome, type BoardItem, type ModelPrediction } from "../api";
 import { useApi, useApp } from "../state";
-import { ago, fmtDateTime, fmtTime, formatAmerican, formatDecimal, formatPct, formatPctPoints, formatPoints, outcomeLabel, sportLabel, statusLabel } from "../format";
+import { ago, fmtDateTime, fmtTime, formatAmerican, formatDecimal, formatPct, formatPctPoints, formatPoints, outcomeLabel, sportLabel, statusLabel, atWord } from "../format";
 import { Callout, CompletenessList, ErrorBox, ExtLink, Loading, ProbRows, TimeStamp, VerdictChip } from "../components/ui";
 import { StepLineChart, SERIES } from "../components/charts";
 import { IconPrint, IconSpark, IconWarn } from "../components/icons";
@@ -23,7 +23,7 @@ export default function GamePage() {
             <Link to="/games">Games</Link> / {a.event.league}
           </div>
           <h1>
-            {a.event.away_name} <span className="subtle" style={{ fontWeight: 500 }}>at</span> {a.event.home_name}
+            {a.event.away_name} <span className="subtle" style={{ fontWeight: 500 }}>{atWord(a.event.sport_key)}</span> {a.event.home_name}
           </h1>
           <div className="meta-line">
             <span>{fmtDateTime(a.event.start_time, zone)}</span>
@@ -50,7 +50,8 @@ export default function GamePage() {
       <div className="grid grid-main">
         <div className="stack">
           <EstimatesCard a={a} names={names} />
-          <QuotesCard market={a.market} names={names} asOf={a.infoAsOf} />
+          <QuotesCard market={a.market} names={names} asOf={a.infoAsOf} note={a.marketConfig?.note} />
+          {a.lines && a.lines.length > 0 && <LinesCard a={a} names={names} />}
           {a.otherMarkets.length > 0 && (
             <div className="card">
               <h2>Other contracts</h2>
@@ -187,6 +188,8 @@ function EstimatesCard({ a, names }: { a: Analysis; names: Partial<Record<Outcom
   );
 }
 
+const DEVIG_LABEL: Record<string, string> = { proportional: "proportional", power: "power method", shin: "Shin's method", odds_ratio: "odds-ratio method" };
+
 export function QuotesTable({ market, names }: { market: MarketView; names: Partial<Record<Outcome, string>> }) {
   const { clock } = useApp();
   const statusChip: Record<string, string> = { current: "chip-good", stale: "chip-warn", incomplete: "chip-muted", after_start: "chip-muted", mismatched_times: "chip-warn" };
@@ -196,7 +199,7 @@ export function QuotesTable({ market, names }: { market: MarketView; names: Part
       <table>
         <caption>
           {market.label}
-          {market.line != null ? ` · line ${market.line > 0 ? "+" : ""}${market.line} (home)` : ""}. Raw implied = 1 / decimal (includes margin). Adjusted = this book's own set with its margin removed proportionally.
+          {market.line != null ? ` · line ${market.line > 0 ? "+" : ""}${market.line} (home)` : ""}. Raw implied = 1 / decimal (includes margin). Adjusted = this book's own set with its margin removed{market.reference?.devig ? ` (${DEVIG_LABEL[market.reference.devig] ?? market.reference.devig})` : ""}.
         </caption>
         <thead>
           <tr>
@@ -217,6 +220,7 @@ export function QuotesTable({ market, names }: { market: MarketView; names: Part
                 {b.book_title}
                 <div className="subtle small">
                   checked {ago(b.lastConfirmed, clock)} · changed {ago(b.newestSource, clock)}
+                  {b.weight != null && market.reference?.weighted && <> · weight {b.weight.toFixed(2)}</>}
                 </div>
               </td>
               {market.outcomes.map((o) => {
@@ -273,7 +277,7 @@ export function QuotesTable({ market, names }: { market: MarketView; names: Part
   );
 }
 
-function QuotesCard({ market, names, asOf }: { market: MarketView; names: Partial<Record<Outcome, string>>; asOf: string }) {
+function QuotesCard({ market, names, asOf, note }: { market: MarketView; names: Partial<Record<Outcome, string>>; asOf: string; note?: string }) {
   const { zone } = useApp();
   return (
     <section className="card" aria-labelledby="q-h">
@@ -283,6 +287,7 @@ function QuotesCard({ market, names, asOf }: { market: MarketView; names: Partia
       </div>
       {market.books.length ? <QuotesTable market={market} names={names} /> : <p className="subtle">No quotes from connected sources for this contract.</p>}
       {market.reference && <p className="subtle small" style={{ marginTop: 10 }}>{market.reference.method} This is an approximation of the market's view, not a measurement of the true probability.</p>}
+      {note && <p className="subtle small">{note}</p>}
       <p className="subtle small">
         "Highest" marks the highest quoted price among connected sources for each outcome. It is only the highest among the sources connected here, not across all sportsbooks.
       </p>
@@ -403,9 +408,99 @@ function ExplainCard({ a }: { a: Analysis }) {
   );
 }
 
+const pctOr = (x: number | null | undefined, digits = 1) => (x == null ? "—" : formatPct(x, digits));
+const evText = (x: number | null | undefined) => (x == null ? "—" : `${x >= 0 ? "+" : "−"}${Math.abs(x * 100).toFixed(1)}%`);
+
+function LinesCard({ a, names }: { a: Analysis; names: Partial<Record<Outcome, string>> }) {
+  const lines = a.lines ?? [];
+  const sideName = (l: NonNullable<Analysis["lines"]>[number], o: Outcome) => {
+    if (l.contract === "total_full_game") return `${o === "over" ? "Over" : "Under"} ${l.line}`;
+    const v = o === "home" ? l.line : -l.line;
+    return `${names[o]} ${v > 0 ? "+" : v === 0 ? "" : "−"}${v === 0 ? "PK" : Math.abs(v)}`;
+  };
+  return (
+    <section className="card" aria-labelledby="l-h">
+      <h2 id="l-h">Spreads and totals</h2>
+      <p className="subtle small">
+        The model prices every quoted line from a full distribution of margins and totals, so it can give the chance of a push (stake returned) on whole-number lines. The sharpened estimate blends the model with the market's own line, using weights fitted on a past season.
+        Market chances are given ignoring pushes, because pushes are refunded.
+      </p>
+      <div className="stack">
+        {lines.map((l) => (
+          <div key={`${l.contract}-${l.line}`} className="table-wrap" tabIndex={0}>
+            <table>
+              <caption>
+                {l.contract === "spread_full_game" ? "Spread" : "Total"} {l.contract === "spread_full_game" && l.line > 0 ? "+" : ""}
+                {l.line}
+                {l.contract === "spread_full_game" ? " (home line)" : ""} · {l.booksQuoting} book{l.booksQuoting === 1 ? "" : "s"}
+                {l.isMainLine ? " · most-quoted line" : ""}
+                {l.modelExpected != null && ` · model expects ${l.contract === "spread_full_game" ? `home ${l.modelExpected >= 0 ? "+" : "−"}${Math.abs(l.modelExpected).toFixed(1)}` : `${l.modelExpected.toFixed(1)} points`}`}
+                {l.combinedExpected != null && `, sharpened ${l.contract === "spread_full_game" ? `${l.combinedExpected >= 0 ? "+" : "−"}${Math.abs(l.combinedExpected).toFixed(1)}` : l.combinedExpected.toFixed(1)} (${Math.round((l.combinedWeight ?? 0) * 100)}% model)`}
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Side</th>
+                  <th scope="col" className="r">Model win / push</th>
+                  <th scope="col" className="r">Sharpened win</th>
+                  <th scope="col" className="r">Market (no push)</th>
+                  <th scope="col" className="r">Best price</th>
+                  <th scope="col" className="r">Expected net / point</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(Object.keys(l.sides) as Outcome[]).map((o) => {
+                  const sd = l.sides[o]!;
+                  return (
+                    <tr key={o}>
+                      <td>{sideName(l, o)}</td>
+                      <td className="r num">
+                        {sd.model ? (
+                          <>
+                            {formatPct(sd.model.win, 1)}
+                            {sd.model.push > 0.0005 && <span className="subtle"> / {formatPct(sd.model.push, 1)}</span>}
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="r num">{pctOr(sd.combined?.win)}</td>
+                      <td className="r num">{pctOr(sd.market)}</td>
+                      <td className="r num">
+                        {sd.best ? (
+                          <>
+                            {formatAmerican(sd.best.american)} <span className="subtle">({formatDecimal(sd.best.decimal)})</span>
+                            <div className="small subtle">{sd.best.book}</div>
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="r num">
+                        {evText(sd.combinedEv ?? sd.ev)}
+                        <div className="small subtle">{sd.combinedEv != null ? "sharpened" : sd.ev != null ? "model" : ""}</div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
+      {!a.model.available && <p className="small subtle" style={{ marginTop: 8 }}>No model for this game: only market prices are shown.</p>}
+    </section>
+  );
+}
+
 function ModelCard({ a }: { a: Analysis }) {
   const p = a.model.prediction;
-  const featureLabel: Record<string, string> = { home_advantage: "Home advantage", elo_diff_per_100: "Rating difference (per 100 Elo)", rest_diff_days: "Rest-day difference" };
+  const featureLabel: Record<string, string> = {
+    home_advantage: "Home advantage",
+    elo_diff_per_100: "Rating difference (per 100 Elo)",
+    rest_diff_days: "Rest-day difference",
+    back_to_back_diff: "Back-to-back difference",
+    elo_diff_best_of_5: "Rating difference × best of five",
+  };
   return (
     <section className="card" aria-labelledby="m-h">
       <h2 id="m-h">Independent model</h2>
@@ -429,7 +524,7 @@ function ModelCard({ a }: { a: Analysis }) {
               <tbody>
                 {p.features.map((f) => (
                   <tr key={f.name}>
-                    <td>{featureLabel[f.name] ?? f.name}</td>
+                    <td>{f.label ?? featureLabel[f.name] ?? f.name}</td>
                     <td className="r num">{f.value.toFixed(2)}</td>
                     <td className="r num">{f.weight === 0 ? "not used" : f.weight.toFixed(2)}</td>
                     <td className="r num">{f.contribution.toFixed(2)}</td>

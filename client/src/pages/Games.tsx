@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { qs } from "../api";
 import { useApi, useApp } from "../state";
-import { fmtDate, fmtTime, localDate, shiftDate, sportLabel, statusLabel } from "../format";
+import { fmtDate, fmtTime, localDate, shiftDate, sportLabel, statusLabel, atWord } from "../format";
 import { Empty, ErrorBox, FictionalNote, Loading } from "../components/ui";
 
 interface EventsResp {
@@ -82,7 +82,7 @@ export default function GamesPage() {
                     <td className="num">{fmtTime(e.start, zone)}</td>
                     <td>
                       <Link to={`/games/${encodeURIComponent(e.id)}`}>
-                        {e.away} at {e.home}
+                        {e.away} {atWord(e.sport)} {e.home}
                       </Link>
                       {e.gameNumber > 1 && <span className="chip" style={{ marginLeft: 6 }}>Game {e.gameNumber}</span>}
                       {e.rescheduledFrom && <span className="chip chip-warn" style={{ marginLeft: 6 }}>Make-up / rescheduled</span>}

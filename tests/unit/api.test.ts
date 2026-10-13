@@ -38,7 +38,7 @@ const transport = fakeTransport([
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), "overround-test-"));
-  cfg = loadConfig({ dbFile: path.join(dir, "test.sqlite"), staticDir: path.join(dir, "no-client"), oddsApiKey: null, anthropicApiKey: null, instructorPin: null, allowRemote: false, port: 5180, host: "127.0.0.1" });
+  cfg = loadConfig({ dbFile: path.join(dir, "test.sqlite"), staticDir: path.join(dir, "no-client"), oddsApiKey: null, balldontlieApiKey: null, anthropicApiKey: null, instructorPin: null, allowRemote: false, port: 5180, host: "127.0.0.1" });
   ctx = await buildApp({ config: cfg, transport, now: () => now });
 }, 60000);
 
@@ -61,7 +61,7 @@ describe("security", () => {
     const r = await req("GET", "/api/settings");
     expect(r.headers["content-security-policy"]).toContain("default-src 'self'");
     expect(r.headers["x-frame-options"]).toBe("DENY");
-    expect(r.json.secrets).toEqual({ oddsApiKey: false, anthropicApiKey: false, instructorPin: false });
+    expect(r.json.secrets).toEqual({ oddsApiKey: false, anthropicApiKey: false, balldontlieApiKey: false, instructorPin: false });
     expect(JSON.stringify(r.json)).not.toMatch(/apiKey"\s*:\s*"/);
   });
 
@@ -335,5 +335,55 @@ describe("scheduler", () => {
     expect(jobs.find((j) => j.name === "results_refresh")!.last_result).toMatch(/Failed: provider down/);
     expect(jobs.find((j) => j.name === "odds_refresh")!.next_run_at).toBe("2026-06-16T15:00:00Z");
     expect(sched.summary().note).toMatch(/only while this program is running/);
+  });
+});
+
+describe("value finder, average lines and imports", () => {
+  it("serves the value finder, average lines and backtest for the demo day", async () => {
+    const v = await req("GET", "/api/value?dataset=demo");
+    expect(v.status).toBe(200);
+    expect(v.json.date).toBe("2026-06-16");
+    expect(v.json.mostLikely.length).toBeGreaterThan(5);
+    expect(Object.keys(v.json.grades)).toEqual(["A", "B", "C", "D"]);
+    expect(JSON.stringify(v.json)).not.toMatch(/\block\b|guarantee(d)? win/i);
+    const al = await req("GET", "/api/average-lines?dataset=demo&date=2026-06-16");
+    expect(al.status).toBe(200);
+    expect(al.json.games.some((g: any) => g.markets.some((m: any) => m.contract === "spread_full_game"))).toBe(true);
+    const bt = await req("GET", "/api/value/backtest?dataset=demo");
+    expect(bt.status).toBe(200);
+    expect(bt.json.strategies.map((s: any) => s.key)).toEqual(["consensus_edge", "favourite"]);
+    // Replays cannot look into the future, here too.
+    expect((await req("GET", "/api/value?dataset=demo&asOf=2027-01-01T00:00:00Z")).status).toBe(400);
+    expect((await req("GET", "/api/average-lines?dataset=demo&date=16-06-2026")).status).toBe(400);
+  }, 60000);
+
+  it("lists the new providers and imports results files only through a validated write", async () => {
+    const p = await req("GET", "/api/providers");
+    expect(p.json.providers.map((x: any) => x.id)).toEqual(["oddsapi", "mlb", "nflverse", "balldontlie", "openmeteo", "rss"]);
+    expect(p.json.providers.find((x: any) => x.id === "balldontlie").keyConfigured).toBe(false);
+    const csv = "date,time,home,away,home_score,away_score\n2025-01-05,19:30,Alpha,Beta,101,99\n";
+    const noHeader = await ctx.app.inject({ method: "POST", url: "/api/import/results", headers: { host: HOST, "content-type": "application/json" }, payload: JSON.stringify({ sport: "basketball_nba", preset: "generic", csv }) });
+    expect(noHeader.statusCode).toBe(403);
+    expect((await req("POST", "/api/import/results", { sport: "basketball_nba", preset: "tennis-data", csv })).status).toBe(400);
+    expect((await req("POST", "/api/import/results", { sport: "../etc", preset: "generic", csv })).status).toBe(400);
+    const ok = await req("POST", "/api/import/results", { sport: "basketball_nba", preset: "generic", csv });
+    expect(ok.status).toBe(200);
+    expect(ok.json).toMatchObject({ rows: 1, imported: 1, created: 1 });
+    // Imported live data never appears in the demo dataset.
+    expect((await req("GET", "/api/events?dataset=demo&q=Alpha&from=2025-01-01&to=2025-01-10")).json.events).toHaveLength(0);
+    // A larger file than the default body limit is accepted on this route.
+    const big = "date,home,away,home_score,away_score\n" + Array.from({ length: 7000 }, (_, i) => `2024-0${1 + (i % 9)}-1${i % 10},Team ${i % 30},Team ${(i + 7) % 30},${90 + (i % 20)},${88 + (i % 17)}`).join("\n");
+    expect(big.length).toBeGreaterThan(200_000);
+    const r = await req("POST", "/api/import/results", { sport: "basketball_nba", preset: "generic", csv: big });
+    expect(r.status).toBe(200);
+    expect(r.json.rows).toBe(7000);
+  }, 60000);
+
+  it("settings accept the new provider options and reject bad ones", async () => {
+    const r = await req("PUT", "/api/settings", { providers: { nflverse: { enabled: true, historySeasons: 4 }, oddsapi: { tennisAuto: true } } });
+    expect(r.status).toBe(200);
+    expect(r.json.settings.providers.nflverse.historySeasons).toBe(4);
+    expect((await req("PUT", "/api/settings", { providers: { balldontlie: { requestsPerMinute: 0 } } })).status).toBe(400);
+    await req("PUT", "/api/settings", { providers: { nflverse: { enabled: false }, oddsapi: { tennisAuto: false } } });
   });
 });

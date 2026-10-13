@@ -18,7 +18,8 @@ export interface ContractSpec {
   hasLine: boolean;
   pushPossible: boolean;
   settlement: string;
-  modelSupported: boolean; // whether the implemented statistical model can price this contract
+  /** Whether the implemented statistical model can price this contract (spreads/totals: team sports with scores). */
+  modelSupported: boolean;
 }
 
 export const CONTRACTS: Record<ContractKey, ContractSpec> = {
@@ -53,7 +54,7 @@ export const CONTRACTS: Record<ContractKey, ContractSpec> = {
     pushPossible: true,
     settlement:
       "Home score plus the home line versus away score. A tie on the line is a push (points returned). Different lines are different contracts.",
-    modelSupported: false,
+    modelSupported: true,
   },
   total_full_game: {
     key: "total_full_game",
@@ -64,7 +65,7 @@ export const CONTRACTS: Record<ContractKey, ContractSpec> = {
     pushPossible: true,
     settlement:
       "Combined score versus the line. Exactly on the line is a push. Different totals are different contracts.",
-    modelSupported: false,
+    modelSupported: true,
   },
 };
 
@@ -92,15 +93,72 @@ export function sameContract(
 }
 
 /** Sport families used for contract mapping and model support. */
-export type SportFamily = "baseball" | "soccer" | "basketball" | "american_football" | "ice_hockey" | "other";
+export type SportFamily = "baseball" | "soccer" | "basketball" | "american_football" | "ice_hockey" | "tennis" | "other";
 
 export function sportFamily(sportKey: string): SportFamily {
   if (sportKey.startsWith("baseball") || sportKey === "demo_baseball") return "baseball";
   if (sportKey.startsWith("soccer") || sportKey === "demo_soccer") return "soccer";
-  if (sportKey.startsWith("basketball")) return "basketball";
-  if (sportKey.startsWith("americanfootball")) return "american_football";
+  if (sportKey.startsWith("basketball") || sportKey === "demo_basketball") return "basketball";
+  if (sportKey.startsWith("americanfootball") || sportKey === "demo_football") return "american_football";
   if (sportKey.startsWith("icehockey")) return "ice_hockey";
+  if (sportKey.startsWith("tennis") || sportKey === "demo_tennis") return "tennis";
   return "other";
+}
+
+/** The headline contract for a sport: 3-way regulation result for soccer, 2-way moneyline otherwise. */
+export function primaryContract(sportKey: string): ContractKey {
+  return sportFamily(sportKey) === "soccer" ? "moneyline_3way_regulation" : "moneyline_2way_full_game";
+}
+
+/** Sports with an independent statistical model (2-way moneyline plus, for team sports, spreads and totals). */
+export function modelSupportedSport(sportKey: string): boolean {
+  const f = sportFamily(sportKey);
+  return f === "baseball" || f === "basketball" || f === "american_football" || f === "tennis";
+}
+
+/**
+ * The key a model and its participants live under. Odds providers list each tennis tournament
+ * as its own sport (tennis_atp_wimbledon, ...); players and ratings are shared across a tour.
+ */
+export function modelKeyFor(sportKey: string): string {
+  if (sportKey.startsWith("tennis_atp")) return "tennis_atp";
+  if (sportKey.startsWith("tennis_wta")) return "tennis_wta";
+  return sportKey;
+}
+
+/**
+ * Season label for a game. Leagues whose season crosses New Year (NBA, NFL, NHL, European
+ * soccer) use the starting year, so a January NFL playoff game belongs to the previous season.
+ */
+export function seasonOf(sportKey: string, startIso: string): string {
+  const year = Number(startIso.slice(0, 4));
+  const month = Number(startIso.slice(5, 7));
+  if (sportKey.startsWith("demo_")) return String(year); // fictional leagues run within a calendar year
+  const fam = sportFamily(sportKey);
+  const crossesNewYear =
+    sportKey === "basketball_nba" ||
+    sportKey === "americanfootball_nfl" ||
+    sportKey === "icehockey_nhl" ||
+    (fam === "soccer" && !sportKey.includes("usa_mls") && !sportKey.includes("brazil") && !sportKey.includes("japan"));
+  if (!crossesNewYear) return String(year);
+  // NFL seasons start in September (playoffs to February); NBA/NHL/soccer start Aug-Oct.
+  return String(month >= 8 ? year : year - 1);
+}
+
+export type Surface = "hard" | "clay" | "grass";
+
+/** Surface inferred from a tournament key/name when the provider does not state it (null = unknown). */
+export function tennisSurfaceFromName(name: string): Surface | null {
+  const n = name.toLowerCase();
+  if (/(french|roland|monte.?carlo|madrid|rome|italian|barcelona|hamburg|buenos|rio|estoril|munich|geneva|lyon|bastad|gstaad|umag|kitzbuhel|clay)/.test(n)) return "clay";
+  if (/(wimbledon|queens|queen_s|halle|eastbourne|s.?hertogenbosch|mallorca|stuttgart_grass|grass)/.test(n)) return "grass";
+  if (/(australian|aus_open|us_open|indian_wells|miami|cincinnati|canada|toronto|montreal|shanghai|paris_masters|atp_finals|wta_finals|dubai|doha|beijing|tokyo|hard)/.test(n)) return "hard";
+  return null;
+}
+
+/** Men's Grand Slam singles are best of five sets. */
+export function tennisBestOfFromKey(sportKey: string): 3 | 5 {
+  return /tennis_atp_(aus_open|australian_open|french_open|wimbledon|us_open)/.test(sportKey) ? 5 : 3;
 }
 
 /**
@@ -127,5 +185,5 @@ export function contractFromOddsApiMarket(sportKey: string, marketKey: string): 
 /** Is the sport's weather relevant to the game (outdoor sports)? */
 export function weatherRelevant(sportKey: string): boolean {
   const fam = sportFamily(sportKey);
-  return fam === "baseball" || fam === "soccer" || fam === "american_football";
+  return fam === "baseball" || fam === "soccer" || fam === "american_football" || fam === "tennis";
 }

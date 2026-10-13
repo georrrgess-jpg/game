@@ -56,6 +56,164 @@ function CIText({ ci, better }: { ci: CI | null; better: string }) {
   );
 }
 
+interface LineEval {
+  n: number;
+  pushes: number;
+  warning: string | null;
+  meanAbsError: number | null;
+  model: Scored | null;
+  market: Scored | null;
+  combined: Scored | null;
+  combinedWeight: number | null;
+  modelMinusMarketLogLoss: CI | null;
+  combinedMinusMarketLogLoss: CI | null;
+  note: string;
+}
+
+function LinesEvaluation({ lines }: { lines: Record<string, LineEval | null> }) {
+  const entries = Object.entries(lines).filter(([, v]) => v) as [string, LineEval][];
+  if (!entries.length) return null;
+  return (
+    <div className="card">
+      <h2>Spreads and totals on the holdout</h2>
+      <p className="small text-2">{entries[0][1].note} The sharpened estimate blends the model's expected margin or total with the one implied by the market's line and price, with the weight chosen on the validation season.</p>
+      <div className="table-wrap" tabIndex={0} style={{ marginTop: 10 }}>
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Contract</th>
+              <th scope="col" className="r">Games</th>
+              <th scope="col" className="r">Typical miss</th>
+              <th scope="col" className="r">Model log loss</th>
+              <th scope="col" className="r">Sharpened</th>
+              <th scope="col" className="r">Market</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map(([k, v]) => (
+              <tr key={k}>
+                <td>{k === "spread_full_game" ? "Spread (home covers)" : "Total (over)"}</td>
+                <td className="r num">
+                  {v.n}
+                  {v.pushes ? <span className="subtle"> + {v.pushes} push</span> : null}
+                </td>
+                <td className="r num">{v.meanAbsError != null ? `${v.meanAbsError.toFixed(1)} pts` : "—"}</td>
+                <td className="r num">{f3(v.model?.logLoss)}</td>
+                <td className="r num">{v.combined ? `${f3(v.combined.logLoss)} (${Math.round((v.combinedWeight ?? 0) * 100)}% model)` : "—"}</td>
+                <td className="r num">{f3(v.market?.logLoss)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <ul className="list-bullets small" style={{ marginTop: 10 }}>
+        {entries.map(([k, v]) => (
+          <li key={k}>
+            {k === "spread_full_game" ? "Spread" : "Total"}: model minus market <CIText ci={v.modelMinusMarketLogLoss} better="Model" />
+            {v.combinedMinusMarketLogLoss && (
+              <>
+                ; sharpened minus market <CIText ci={v.combinedMinusMarketLogLoss} better="Sharpened" />
+              </>
+            )}
+            {v.warning && <span className="subtle"> {v.warning}</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+interface MarketSettingsData {
+  method: string;
+  methodLabel: string;
+  source: "default" | "fitted";
+  weighted: boolean;
+  calibration: {
+    season: string;
+    forSeason: string;
+    games: number;
+    timing: string;
+    methods: { method: string; label: string; logLoss: number; brier: number }[];
+    chosen: string;
+    books: { book_key: string; book_title: string; n: number; logLoss: number; vsConsensus: number; weight: number | null }[];
+    weighting: { used: boolean; reason: string };
+    notes: string[];
+  } | null;
+}
+
+function MarketSettings({ s }: { s: MarketSettingsData }) {
+  const c = s.calibration;
+  return (
+    <div className="card">
+      <h2>Market reference settings</h2>
+      {!c ? (
+        <p className="small text-2">Not enough earlier-season results with quotes to compare methods, so the defaults are used: {s.methodLabel} margin removal and equal book weights.</p>
+      ) : (
+        <>
+          <p className="small text-2">
+            Chosen on {c.games} completed {c.season} games and applied unchanged to {c.forSeason}. {c.timing}
+          </p>
+          <div className="grid grid-2" style={{ marginTop: 10 }}>
+            <div className="table-wrap" tabIndex={0}>
+              <table>
+                <caption>Margin-removal method (consensus log loss; lower is better)</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Method</th>
+                    <th scope="col" className="r">Log loss</th>
+                    <th scope="col" className="r">Brier</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {c.methods.map((m) => (
+                    <tr key={m.method}>
+                      <td>
+                        {m.label}
+                        {m.method === c.chosen && <span className="chip chip-good" style={{ marginLeft: 6 }}>used</span>}
+                      </td>
+                      <td className="r num">{m.logLoss.toFixed(5)}</td>
+                      <td className="r num">{m.brier.toFixed(5)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="table-wrap" tabIndex={0}>
+              <table>
+                <caption>Books: log loss relative to the consensus (negative = sharper)</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Book</th>
+                    <th scope="col" className="r">Games</th>
+                    <th scope="col" className="r">vs consensus</th>
+                    <th scope="col" className="r">Weight</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {c.books.map((b) => (
+                    <tr key={b.book_key}>
+                      <td>{b.book_title}</td>
+                      <td className="r num">{b.n}</td>
+                      <td className="r num">{b.vsConsensus >= 0 ? "+" : ""}{b.vsConsensus.toFixed(4)}</td>
+                      <td className="r num">{b.weight != null ? b.weight.toFixed(2) : "equal"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <ul className="list-bullets small text-2" style={{ marginTop: 10 }}>
+            <li>{c.weighting.reason}</li>
+            {c.notes.map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function ReportPage() {
   const { dataset, asOfParam, zone } = useApp();
   const [sport, setSport] = useState<string>("");
@@ -161,7 +319,7 @@ export default function ReportPage() {
                   <tbody>
                     {(
                       [
-                        ["Independent model (elo-logit)", r.holdout.model],
+                        [`Independent model (${r.model?.config?.label ?? "Elo"} + logistic)`, r.holdout.model],
                         ["Baseline: training home-win rate", r.holdout.homeRate],
                         ["Baseline: coin flip (50%)", r.holdout.coin],
                         ["Market reference (60 min pre-game)", r.holdout.market],
@@ -221,6 +379,10 @@ export default function ReportPage() {
               </div>
             </div>
           )}
+
+          {r.lines && <LinesEvaluation lines={r.lines} />}
+
+          {r.marketSettings && <MarketSettings s={r.marketSettings} />}
 
           {r.validationMetrics && (
             <div className="card">
@@ -327,9 +489,10 @@ export default function ReportPage() {
       <div className="card">
         <h2>Limitations</h2>
         <ul className="list-bullets text-2">
-          <li>The model sees team results, home advantage and (if it helps in validation) rest. It does not see starting pitchers, injuries, lineups, weather, travel or motivation, so it should be expected to trail a well-informed market.</li>
+          <li>The model sees results (and, in basketball and football, margins of victory), home advantage, and rest, back-to-backs, surfaces or best-of-five formats where they help in validation. It does not see starting pitchers, quarterbacks, injuries, lineups, weather, travel or motivation, so it should be expected to trail a well-informed market.</li>
           <li>The 80% range reflects uncertainty in the fitted weights only. It understates total uncertainty.</li>
-          <li>The market reference removes margin proportionally. That is an approximation; favourite–longshot bias and other effects are not modelled.</li>
+          <li>The market reference removes each book's margin with the method that matched results best in the previous season (see "Market reference settings"). Any such method is an approximation of the market's view.</li>
+          <li>Spread and total probabilities assume the shape of past margin and total distributions (including key numbers) carries over; unusual games (blowouts, overtime, weather) are not modelled separately.</li>
           <li>Demo results come from a fictional simulator, so they demonstrate the method, not real-world performance.</li>
           <li>Past performance on one season says little about the next; small samples are dominated by luck.</li>
         </ul>
