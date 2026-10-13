@@ -5,7 +5,7 @@
 //      profitable: a 75% favourite priced at 1.25 loses money on average.
 //   2. Price discrepancies: a quoted price that beats the margin-free consensus of several books
 //      (the most reliable kind of edge), a model edge only where the model has beaten the market
-//      out of sample, and arbitrage (prices across books that cover every outcome for a guaranteed return).
+//      out of sample, and arbitrage (prices across books that would cover every outcome at a profit if placed together).
 //   3. Track record: what each rule would have done on this season's completed games, with
 //      confidence intervals and closing line value, so students can see whether it is noise.
 // Simulation points only. Nothing here places, links to or sizes a real-money wager.
@@ -30,7 +30,7 @@ export const CLOSING_MINUTES = 20;
 
 export type Grade = "A" | "B" | "C" | "D";
 export const GRADE_TEXT: Record<Grade, string> = {
-  A: "Arbitrage: prices from different books cover every outcome for a guaranteed return, if all legs are placed at these prices at the same moment.",
+  A: "Arbitrage: current prices from different books, confirmed within five minutes of each other, cover every outcome for a positive return if all legs could be placed at those prices at the same moment. Prices move and books cap stakes, so this is rarely achievable in practice.",
   B: `Price beats the consensus: this price is better than the margin-free consensus of at least ${MIN_CONSENSUS_BOOKS} books by ${Math.round(MIN_EDGE * 100)}% or more.`,
   C: "Validated model edge: the model disagrees with the market and has beaten it on out-of-sample games.",
   D: "Unproven: only the model (not validated against the market) sees value. Treat as a hypothesis to test, not an edge.",
@@ -74,6 +74,7 @@ export interface ArbitrageOpportunity {
   line: number | null;
   legs: { outcome: OutcomeKey; selection: string; decimal: number; american: number; book: string; stakeShare: number }[];
   impliedTotal: number;
+  /** Return on the total stake if every leg were placed at these prices simultaneously. */
   guaranteedReturn: number;
 }
 
@@ -99,8 +100,20 @@ function candidatesFor(a: GameAnalysis): { candidates: Candidate[]; arbs: Arbitr
   for (const { m, line, side } of markets) {
     const spec = CONTRACTS[m.contract];
     // ---- arbitrage across books (same contract, same line) ----
-    if (spec.outcomes.every((o) => m.bestPrice[o])) {
-      const best = spec.outcomes.map((o) => m.bestPrice[o]!);
+    // Only current, complete books, and only prices confirmed within minutes of each other.
+    const arbLegs = spec.outcomes.map((o) => {
+      let best: { decimal: number; american: number; book_title: string; known_at: string } | null = null;
+      for (const b of m.books) {
+        const q = b.outcomes[o];
+        if (b.status !== "current" || !q) continue;
+        if (!best || q.decimal > best.decimal) best = { decimal: q.decimal, american: q.american, book_title: b.book_title, known_at: q.known_at };
+      }
+      return best;
+    });
+    const times = arbLegs.filter((x) => x).map((x) => Date.parse(x!.known_at));
+    const sameMoment = times.length === spec.outcomes.length && Math.max(...times) - Math.min(...times) <= 5 * 60000;
+    if (sameMoment) {
+      const best = arbLegs.map((x) => x!);
       const arb = arbitrage(best.map((b) => b.decimal));
       if (arb.isArbitrage) {
         arbs.push({
@@ -360,7 +373,7 @@ export class Backtester {
       seasons[sport] = season;
       finals.push(...all.filter((g) => (g.season ?? seasonOf(sport, g.start_time)) === season));
     }
-    const key = `${dataset}|${asOf}|${finals.length}|${finals.map((f) => f.id).slice(-1)[0] ?? ""}`;
+    const key = `${dataset}|${asOf}|${finals.length}|${finals.map((f) => f.id).slice(-1)[0] ?? ""}|${markets.version()}`;
     const hit = this.cache.get(key);
     if (hit) return hit as ReturnType<Backtester["compute"]>;
     const r = this.compute(finals, seasons, markets);

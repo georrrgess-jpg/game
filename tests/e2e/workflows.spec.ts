@@ -198,8 +198,14 @@ test("Knowledge Center: search topics and use the calculators", async ({ page })
   await expect(calc.getByText("40.00%", { exact: true })).toBeVisible();
   await conv.fill("+50");
   await expect(page.getByText(/at least \+100 or at most -100/)).toBeVisible();
+  // Floating-point edge (7% win + 93% push) must not crash the page.
+  await page.getByLabel("Search topics").fill("expected value");
+  const ev = page.locator(".card-tight").filter({ hasText: "Expected value (with pushes)" });
+  await ev.getByLabel("Chance of winning").fill("7");
+  await ev.getByLabel("Chance of a push").fill("93");
+  await expect(ev.getByText(/Expected net per 1 point staked/)).toBeVisible();
   await page.getByLabel("Search topics").fill("arbitrage");
-  await expect(page.getByText(/Arbitrage: a guaranteed/)).toBeVisible();
+  await expect(page.getByText(/Arbitrage: these prices return/)).toBeVisible();
   await page.getByLabel("Search topics").fill("");
   await page.getByRole("button", { name: "Expand all" }).click();
   await expect(page.getByText(/1-800-GAMBLER/)).toBeVisible();
@@ -207,8 +213,11 @@ test("Knowledge Center: search topics and use the calculators", async ({ page })
 });
 
 test("Football game page shows spreads and totals with push chances", async ({ page }) => {
-  await page.goto("/games/demo-ft-2026-06-16-ELM-ISL");
+  const board = await (await page.request.get("/api/board?dataset=demo")).json();
+  const ft = board.items.find((i: { sport: string; started: boolean }) => i.sport === "demo_football" && !i.started);
+  await page.goto(`/games/${encodeURIComponent(ft.eventId)}`);
   await expect(page.getByRole("heading", { name: "Spreads and totals" })).toBeVisible();
   await expect(page.locator("table").filter({ hasText: "Model win / push" }).first()).toBeVisible();
+  await expect(page.getByText(/model expects (home|away) by \d+\.\d \(fair home line/).first()).toBeVisible();
   await noHorizontalOverflow(page);
 });

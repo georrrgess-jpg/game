@@ -163,7 +163,7 @@ function DevigCalc() {
 
 /** Price at which EV is exactly zero: w·(d − 1) = loss, so d = (w + loss) / w. */
 function fairText(w: number, push: number): string {
-  const loss = 1 - w - push;
+  const loss = Math.max(0, 1 - w - push);
   if (!(w > 0) || !(loss > 0)) return "—";
   return am((w + loss) / w);
 }
@@ -175,8 +175,9 @@ function EvCalc() {
   const p = parsePrice(price);
   const w = prob(win);
   const pu = prob(push);
-  const valid = p.ok && w != null && pu != null && w + pu <= 1;
-  const ev = valid ? expectedNetPointsWithPush(w!, 1 - w! - pu!, pu!, p.decimal) : null;
+  const valid = p.ok && w != null && pu != null && w + pu <= 1 + 1e-9;
+  // Clamp: 0.07 + 0.93 can leave a loss chance of -1e-17 in floating point.
+  const ev = valid ? expectedNetPointsWithPush(w!, Math.max(0, 1 - w! - pu!), Math.max(0, Math.min(1 - w!, pu!)), p.decimal) : null;
   return (
     <Calc title="Expected value (with pushes)">
       <div className="row">
@@ -287,7 +288,7 @@ function ArbCalc() {
           <p>
             Sum of implied probabilities: <span className="num">{pct(a.impliedTotal, 2)}</span>.{" "}
             {a.isArbitrage ? (
-              <strong>Arbitrage: a guaranteed {signedPct(a.margin)} if every leg is placed at these prices at the same time.</strong>
+              <strong>Arbitrage: these prices return {signedPct(a.margin)} on every result, if every leg could be placed at them at the same moment.</strong>
             ) : (
               <>No arbitrage: covering every outcome loses {signedPct(-a.margin).replace("+", "")} of the total for certain.</>
             )}

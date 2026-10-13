@@ -128,10 +128,13 @@ and the sports and books actually observed on your installation.
   Lsets, Comment, and PSW/PSL, AvgW/AvgL closing odds when present). Retirements and walkovers are
   skipped. The two players are listed alphabetically (tennis has no home side). Closing odds are stored
   60 minutes before an approximate noon start.
-- A **generic** format for any sport: `date, home, away, home_score, away_score` and optionally
+- A **generic** format for any sport: `date` (YYYY-MM-DD or a full ISO timestamp; 01/07/2024 is
+  rejected as ambiguous), `home, away, home_score, away_score` and optionally
   `time` (UTC), `neutral`, `surface`, `best_of`.
 
-Imported games are matched to games already in the database (same teams, start within 2.5 hours, or
+Past games are treated as known a week before they start, except knockout pairings (tennis rounds,
+playoffs), which only appear once both sides' previous games have finished, so a replay never
+reveals who advanced. Imported games are matched to games already in the database (same teams, start within 2.5 hours, or
 the same day for date-only files) so odds stay attached, and re-importing is idempotent.
 
 ### The Odds API (v4): market quotes
@@ -259,8 +262,9 @@ line and price; the blend weight is chosen on the validation season (0 when the 
 **Combined estimate:** a logistic blend of model and market fitted on the validation season. It is
 labelled as using market odds.
 
-**Value Finder grades.** A: arbitrage, the best prices for every outcome of one contract (same line)
-imply less than 100% in total. B: a price beats the margin-free consensus of at least 3 books by 1% or
+**Value Finder grades.** A: arbitrage, the best current prices for every outcome of one contract
+(same line, confirmed within five minutes of each other) imply less than 100% in total. That return
+exists only if every leg could be placed at those prices at the same moment. B: a price beats the margin-free consensus of at least 3 books by 1% or
 more (price × consensus probability − 1 ≥ 0.01). C: the model or combined estimate sees at least 1%
 EV and the model–market verdict is a research lead (validated out of sample). D: only an unvalidated
 estimate sees value. The **backtest** applies rule B, and a "back the favourite" baseline, to this
@@ -346,7 +350,7 @@ Claude Code session is not a background worker for this app.
 
 ## 9. What was tested, and what needs live credentials
 
-`npm test`: **140 tests** across 9 files, all passing in the build environment. Covers:
+`npm test`: **145 tests** across 9 files, all passing in the build environment. Covers:
 - odds math (positive and negative American odds, ±100, round-trips, malformed and zero quotes,
   3-way margin, EV with and without pushes, half-up rounding), the four margin-removal methods,
   fractional odds, Kelly, arbitrage stake splits, parlays, hedging and closing line value,
@@ -366,7 +370,10 @@ Claude Code session is not a background worker for this app.
 - provider contract tests against recorded-format responses (nflverse games.csv with relocated
   teams, neutral sites and closing lines; balldontlie paging, rate spacing and key handling;
   tennis-data.co.uk and generic CSV imports; Odds API NFL quotes attaching to the nflverse schedule
-  and tennis tournaments sharing one player list; Odds API odds, scores and historical;
+  and tennis tournaments sharing one player list; plus regressions from a second independent review:
+  later knockout rounds hidden until earlier rounds finish, tennis odds listed in the other player
+  order, tennis game lines never settled on set scores, caches refreshing after imports, seasons of
+  leagues that cross New Year, and ambiguous day/month dates; Odds API odds, scores and historical;
   MLB teams, schedule with make-up, doubleheader, Game Over, suspended, and roster; Open-Meteo;
   RSS and Atom), quota exhaustion, invalid keys, credit caps, 429/5xx retries, caching and
   de-duplication, partial outages, SSRF and allow-list checks, secret redaction,

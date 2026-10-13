@@ -79,6 +79,11 @@ export interface ImportedGame {
   neutral?: boolean;
   indoor?: boolean;
   extra?: Record<string, unknown>;
+  /**
+   * The pairing depends on earlier results (tennis draws, playoffs): the game is only known once both
+   * sides' previous games have finished, never a week ahead.
+   */
+  knockout?: boolean;
   /** Closing prices from the source, stored as quotes 60 minutes before the start (finals only). */
   closing?: { bookKey: string; bookTitle: string; contract: ContractKey; line: number | null; prices: Partial<Record<OutcomeKey, number | null>> }[];
 }
@@ -132,6 +137,20 @@ export class GameImporter {
     return rows[0] ?? null;
   }
 
+  /** Information time for a past game created by an import (see `knockout`). Imports must run in date order. */
+  pastKnownAt(sportKey: string, homeId: string, awayId: string, start: string, knockout: boolean): string {
+    const weekBefore = iso(new Date(Date.parse(start) - 7 * 86400000));
+    if (!knockout) return weekBefore;
+    const prev = this.repo.db.get<{ f: string | null }>(
+      `SELECT MAX(final_at) f FROM events WHERE dataset = 'live' AND sport_key = ? AND status = 'final' AND start_time < ? AND start_time >= ?
+         AND (home_id IN (?, ?) OR away_id IN (?, ?))`,
+      [sportKey, start, weekBefore, homeId, awayId, homeId, awayId],
+    );
+    // Known when the later previous game ended, but never after the start itself.
+    const t = prev?.f && prev.f > weekBefore ? prev.f : weekBefore;
+    return t < start ? t : start;
+  }
+
   upsert(g: ImportedGame, retrievedAt: string): { id: string; created: boolean; quotes: number } {
     const sportKey = modelKeyFor(g.sportKey);
     let homeId = this.participant(sportKey, g.home, g.source);
@@ -180,9 +199,9 @@ export class GameImporter {
       source: found?.source ?? g.source,
       source_updated_at: retrievedAt,
       retrieved_at: retrievedAt,
-      // A schedule is public well before the game; an imported historical result is known from its start at the latest.
-      // Upcoming games are known from now on; for past games assume the schedule was public a week ahead.
-      known_at: found ? found.known_at : start > retrievedAt ? retrievedAt : iso(new Date(Date.parse(start) - 7 * 86400000)),
+      // Upcoming games are known from now on. For past games assume the schedule was public a week ahead,
+      // except knockout pairings, which exist only once both sides' previous games have finished.
+      known_at: found ? found.known_at : start > retrievedAt ? retrievedAt : this.pastKnownAt(sportKey, homeId, awayId, start, !!g.knockout),
       extra: { ...prevExtra, ...(g.extra ?? {}), importedFrom: g.source },
     });
     let quotes = 0;
@@ -306,7 +325,8 @@ export class NflverseProvider {
     let created = 0;
     let quotes = 0;
     this.deps.db.tx(() => {
-      for (const r of recs) {
+      const ordered = [...recs].sort((x, y) => `${x.gameday} ${x.gametime}`.localeCompare(`${y.gameday} ${y.gametime}`));
+      for (const r of ordered) {
         if (!want.has(r.season)) continue;
         const h = NFL_TEAMS[NFL_RELOCATED[r.home_team] ?? r.home_team];
         const a = NFL_TEAMS[NFL_RELOCATED[r.away_team] ?? r.away_team];
@@ -343,6 +363,7 @@ export class NflverseProvider {
             neutral: r.location === "Neutral",
             indoor: r.roof === "dome" || r.roof === "closed",
             extra: { week: num(r.week), gameType: r.game_type || null, overtime: r.overtime === "1" },
+            knockout: !!r.game_type && r.game_type !== "REG",
             closing,
           },
           retrievedAt,
@@ -457,8 +478,9 @@ export class BalldontlieProvider {
   ingest(games: z.infer<typeof bdlGameSchema>[], retrievedAt: string): { games: number; created: number } {
     let n = 0;
     let created = 0;
+    const ordered = [...games].sort((x, y) => (x.datetime ?? x.date).localeCompare(y.datetime ?? y.date));
     this.deps.db.tx(() => {
-      for (const g of games) {
+      for (const g of ordered) {
         const start = g.datetime && !Number.isNaN(Date.parse(g.datetime)) ? iso(new Date(g.datetime)) : null;
         const dateOnly = /^\d{4}-\d{2}-\d{2}/.test(g.date) ? g.date.slice(0, 10) : null;
         if (!start && !dateOnly) continue;
@@ -478,6 +500,7 @@ export class BalldontlieProvider {
             awayScore: final ? g.visitor_team_score! : null,
             indoor: true,
             extra: { postseason: !!g.postseason },
+            knockout: !!g.postseason,
           },
           retrievedAt,
         );
@@ -522,6 +545,14 @@ const parseDayMonthYear = (s: string): string | null => {
   return /^\d{4}-\d{2}-\d{2}$/.test(s.trim()) ? s.trim() : null;
 };
 
+/** Generic files: ISO dates (YYYY-MM-DD) or full ISO timestamps only, never ambiguous 01/07/2024. */
+const isoDate = (s: string | undefined): string | null => {
+  const t = (s ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return Number.isNaN(Date.parse(`${t}T00:00:00Z`)) ? null : t;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/.test(t) && !Number.isNaN(Date.parse(t))) return iso(new Date(t));
+  return null;
+};
+
 const decimalOrNull = (s: string | undefined) => {
   if (!s) return null;
   const d = parseDecimal(s);
@@ -549,8 +580,11 @@ export function importResultsCsv(repo: Repo, sportKey: string, csv: string, pres
   const need = preset === "tennis-data" ? ["Date", "Winner", "Loser"] : ["date", "home", "away", "home_score", "away_score"];
   const missing = need.filter((c) => !cols.includes(c));
   if (missing.length) throw new ProviderError(`The file is missing column(s): ${missing.join(", ")}. Expected ${preset === "tennis-data" ? "a tennis-data.co.uk results file saved as CSV" : "date, home, away, home_score, away_score"}.`, "bad_response");
+  // Import in date order so knockout rounds see their earlier rounds (row numbers still refer to the file).
+  const dateKey = (r: Record<string, string>) => (preset === "tennis-data" ? parseDayMonthYear(r.Date) : isoDate(r.date)) ?? "9999";
+  const order = recs.map((r, i) => ({ r, i })).sort((a, b) => dateKey(a.r).localeCompare(dateKey(b.r)) || a.i - b.i);
   repo.db.tx(() => {
-    recs.forEach((r, i) => {
+    order.forEach(({ r, i }) => {
       const rowNo = i + 2;
       if (preset === "tennis-data") {
         const date = parseDayMonthYear(r.Date);
@@ -596,6 +630,7 @@ export function importResultsCsv(repo: Repo, sportKey: string, csv: string, pres
               scoreUnit: "sets",
             },
             closing,
+            knockout: true,
           },
           retrievedAt,
         );
@@ -605,8 +640,8 @@ export function importResultsCsv(repo: Repo, sportKey: string, csv: string, pres
         return;
       }
       // generic
-      const date = parseDayMonthYear(r.date) ?? (r.date && !Number.isNaN(Date.parse(r.date)) ? iso(new Date(r.date)) : null);
-      if (!date) return skip(rowNo, `unreadable date "${r.date}"`);
+      const date = isoDate(r.date);
+      if (!date) return skip(rowNo, `unreadable date "${r.date}" (use YYYY-MM-DD; day/month order is ambiguous)`);
       const hs = num(r.home_score);
       const as = num(r.away_score);
       if (!r.home || !r.away) return skip(rowNo, "missing team names");

@@ -2,6 +2,7 @@
 // `asOf` instant and only returns what was known at that instant, which is what makes
 // historical replay and leakage-free evaluation possible.
 
+import { seasonOf } from "../shared/contracts";
 import type { Db } from "./db";
 import { json } from "./db";
 import type { ContractKey, OutcomeKey } from "../shared/contracts";
@@ -227,12 +228,21 @@ export class Repo {
          known_at=MIN(events.known_at, excluded.known_at),
          extra=excluded.extra`,
       [
-        e.id, e.dataset, e.sport_key, e.league, e.season, e.home_id, e.away_id, e.start_time, e.status, e.status_at, e.final_at,
+        e.id, e.dataset, e.sport_key, e.league, e.season ?? seasonOf(e.sport_key, e.start_time), e.home_id, e.away_id, e.start_time, e.status, e.status_at, e.final_at,
         e.home_score, e.away_score, e.regulation_home, e.regulation_away, e.final_is_regulation, e.neutral_site, e.venue_name,
         e.venue_lat, e.venue_lon, e.venue_tz, e.indoor, e.rescheduled_from, e.game_number, e.source, e.source_updated_at,
         e.retrieved_at, e.known_at, JSON.stringify(e.extra ?? {}),
       ],
     );
+  }
+
+  /** Fill missing season labels (older databases) with the sport's own season rule. */
+  backfillSeasons(): number {
+    const rows = this.db.all<{ id: string; sport_key: string; start_time: string }>("SELECT id, sport_key, start_time FROM events WHERE season IS NULL");
+    this.db.tx(() => {
+      for (const r of rows) this.db.run("UPDATE events SET season = ? WHERE id = ?", [seasonOf(r.sport_key, r.start_time), r.id]);
+    });
+    return rows.length;
   }
 
   event(id: string): EventRecord | null {

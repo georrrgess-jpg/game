@@ -376,7 +376,7 @@ export default function ValuePage() {
                         <div>
                           <GameCell c={a} zone={zone} />
                         </div>
-                        <span className="chip chip-good">Guaranteed {pct1(a.guaranteedReturn)}</span>
+                        <span className="chip chip-good">Prices imply {pct1(a.guaranteedReturn)} if all legs are placed together</span>
                       </div>
                       <div className="table-wrap" tabIndex={0} style={{ marginTop: 8 }}>
                         <table>

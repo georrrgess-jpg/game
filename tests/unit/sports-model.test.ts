@@ -20,7 +20,7 @@ import {
   MARGIN_RANGE,
   type DiscreteModel,
 } from "../../server/model";
-import { modelKeyFor, seasonOf, tennisBestOfFromKey, tennisSurfaceFromName } from "../../shared/contracts";
+import { contractFromOddsApiMarket, modelKeyFor, seasonOf, tennisBestOfFromKey, tennisSurfaceFromName } from "../../shared/contracts";
 
 describe("sport configuration", () => {
   it("maps sports to model families, keys and seasons", () => {
@@ -38,6 +38,16 @@ describe("sport configuration", () => {
     expect(seasonOf("baseball_mlb", "2025-10-30T23:00:00Z")).toBe("2025");
     expect(seasonOf("tennis_atp", "2025-01-20T03:00:00Z")).toBe("2025");
     expect(seasonOf("demo_football", "2026-01-05T00:00:00Z")).toBe("2026");
+    expect(seasonOf("basketball_ncaab", "2025-03-20T00:00:00Z")).toBe("2024");
+    expect(seasonOf("basketball_wnba", "2025-08-20T00:00:00Z")).toBe("2025");
+    expect(seasonOf("americanfootball_ncaaf", "2026-01-01T20:00:00Z")).toBe("2025");
+    expect(seasonOf("americanfootball_cfl", "2025-10-20T00:00:00Z")).toBe("2025");
+    expect(seasonOf("soccer_usa_mls", "2025-10-20T00:00:00Z")).toBe("2025");
+    expect(seasonOf("soccer_epl", "2026-04-20T00:00:00Z")).toBe("2025");
+    // Tennis handicaps and totals are counted in games while results are stored in sets: never mapped.
+    expect(contractFromOddsApiMarket("tennis_atp_wimbledon", "spreads")).toBeNull();
+    expect(contractFromOddsApiMarket("tennis_atp_wimbledon", "totals")).toBeNull();
+    expect(contractFromOddsApiMarket("tennis_atp_wimbledon", "h2h")).toBe("moneyline_2way_full_game");
     expect(tennisSurfaceFromName("tennis_atp_french_open")).toBe("clay");
     expect(tennisSurfaceFromName("tennis_wta_wimbledon")).toBe("grass");
     expect(tennisSurfaceFromName("tennis_atp_us_open")).toBe("hard");

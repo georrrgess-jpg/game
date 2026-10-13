@@ -13,7 +13,9 @@ for (const theme of ["dark", "light"] as const) {
     await page.goto("/");
     await expect(page.locator(".game-card").first()).toBeVisible();
     const gameHref = await page.locator(".teams a").first().getAttribute("href");
-    const pages = ["/", "/value", "/lines", "/learn", "/games", "/markets", "/evidence", "/lab", "/report", "/settings", gameHref!, "/games/demo-ft-2026-06-16-ELM-ISL"];
+    const board = await (await page.request.get("/api/board?dataset=demo")).json();
+    const ft = board.items.find((i: { sport: string }) => i.sport === "demo_football");
+    const pages = ["/", "/value", "/lines", "/learn", "/games", "/markets", "/evidence", "/lab", "/report", "/settings", gameHref!, `/games/${encodeURIComponent(ft.eventId)}`];
     const problems: string[] = [];
     for (const p of pages) {
       await page.goto(p);

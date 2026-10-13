@@ -200,3 +200,72 @@ describe("tennis results import and odds matching", () => {
     expect(a.repo.resolveParticipant("live", "tennis_atp", "Djokovic N.")).toBe(ev.home_id);
   });
 });
+
+describe("review regressions", () => {
+  const TD_HEADER = "ATP,Location,Tournament,Date,Series,Court,Surface,Round,Best of,Winner,Loser,WRank,LRank,Wsets,Lsets,Comment,PSW,PSL\n";
+
+  it("a later knockout round is unknown until the earlier rounds have finished (no early reveal of winners)", async () => {
+    const { analyzeEvent, ModelService } = await import("../../server/analysis");
+    const a = makeDeps();
+    // Rows deliberately out of date order: the importer sorts them.
+    const csv = TD_HEADER + "2,London,Wimbledon,03/07/2024,Grand Slam,Outdoor,Grass,2nd Round,5,Djokovic N.,Fearnley J.,2,277,3,0,Completed,1.01,20\n1,London,Wimbledon,01/07/2024,Grand Slam,Outdoor,Grass,1st Round,5,Djokovic N.,Kopriva V.,2,123,3,0,Completed,1.02,22.5\n";
+    importResultsCsv(a.repo, "tennis_atp", csv, "tennis-data", "2026-01-01T00:00:00Z");
+    const r1 = a.repo.db.get<{ final_at: string }>("SELECT final_at FROM events WHERE id LIKE '%2024-07-01%'")!;
+    const r2 = a.repo.db.get<{ id: string; known_at: string }>("SELECT id, known_at FROM events WHERE id LIKE '%2024-07-03%'")!;
+    expect(r2.known_at).toBe(r1.final_at);
+    const ctx = (asOf: string) => ({ dataset: "live" as const, asOf, zone: "UTC", staleMinutes: 150, discrepancyMinPoints: 0.03, mode: "replay" as const });
+    const models = new ModelService(a.repo, () => 150);
+    expect(analyzeEvent({ repo: a.repo, models }, ctx("2024-06-30T12:00:00Z"), r2.id)).toBeNull();
+    expect(analyzeEvent({ repo: a.repo, models }, ctx(r1.final_at), r2.id)).not.toBeNull();
+    // Regular-season team games keep the "schedule public a week ahead" rule.
+    const g = importResultsCsv(a.repo, "basketball_nba", "date,time,home,away,home_score,away_score\n2025-01-05,19:30,Alpha,Beta,101,99\n", "generic", "2026-01-01T00:00:00Z");
+    expect(g.imported).toBe(1);
+    expect(a.repo.db.get<{ known_at: string }>("SELECT known_at FROM events WHERE home_score = 101")!.known_at).toBe("2024-12-29T19:30:00Z");
+  });
+
+  it("nflverse playoff games are unknown until both teams' previous games are final", async () => {
+    const csv = fixture("nflverse-games.csv").trim() + "\n2023_19_MIA_KC,2023,WC,19,2024-01-13,Saturday,20:00,MIA,7,KC,26,Home,19,33,0,,,,,,,,7,7,,,,,,,,,0,outdoors,grass,,,,,,,,,,,\n";
+    const a = makeDeps({ transport: fakeTransport([{ match: /games\.csv/, respond: () => ok(csv) }]), settings: { providers: { nflverse: { enabled: true } } } });
+    await new NflverseProvider(a.deps).importSeasons([2023]);
+    const wc = a.repo.event("nflverse:2023_19_MIA_KC")!;
+    const lastKc = a.repo.event("nflverse:2023_09_MIA_KC")!; // both teams' latest earlier game in the fixture, but more than a week before
+    expect(Date.parse(wc.known_at)).toBe(Date.parse(wc.start_time) - 7 * 86400000);
+    expect(lastKc.final_at! < wc.known_at).toBe(true);
+  });
+
+  it("tennis odds listed in the other order attach to the imported match with outcomes re-oriented", async () => {
+    const swapped = JSON.stringify([{ id: "ten2", sport_key: "tennis_atp_wimbledon", sport_title: "ATP Wimbledon", commence_time: "2024-07-01T12:30:00Z", home_team: "Vit Kopriva", away_team: "Novak Djokovic", bookmakers: [{ key: "pinnacle", title: "Pinnacle", last_update: "2024-07-01T10:00:00Z", markets: [{ key: "h2h", last_update: "2024-07-01T10:00:00Z", outcomes: [{ name: "Vit Kopriva", price: 21.0 }, { name: "Novak Djokovic", price: 1.02 }] }, { key: "totals", outcomes: [{ name: "Over", price: 1.9, point: 30.5 }, { name: "Under", price: 1.9, point: 30.5 }] }] }] }]);
+    const t = fakeTransport([{ match: /tennis_atp_wimbledon\/odds/, respond: () => ok(swapped, QUOTA) }]);
+    const a = makeDeps({ transport: t, now: new Date("2024-07-01T10:05:00Z"), settings: { providers: { oddsapi: { enabled: true, sports: ["tennis_atp_wimbledon"], markets: ["h2h", "totals"] } } } });
+    importResultsCsv(a.repo, "tennis_atp", fixture("tennis-data.csv"), "tennis-data", "2024-07-03T00:00:00Z");
+    await new OddsApiProvider(a.deps).refreshOdds("tennis_atp_wimbledon");
+    const id = a.repo.linkedEvent("oddsapi", "ten2")!;
+    expect(id.startsWith("import:")).toBe(true);
+    expect(a.db.get<{ n: number }>("SELECT COUNT(*) n FROM events WHERE id LIKE 'oddsapi:%'")!.n).toBe(0);
+    const ev = a.repo.event(id)!;
+    expect(a.repo.participant(ev.home_id)!.name).toBe("Djokovic N.");
+    const q = a.repo.latestQuotes(id, "2024-07-01T11:00:00Z").filter((x) => x.book_key === "pinnacle");
+    // Djokovic is "home" in the stored event, so his 1.02 is stored on the home outcome; game totals are not stored.
+    expect(Object.fromEntries(q.map((x) => [x.outcome, x.price_decimal]))).toEqual({ home: 1.02, away: 21 });
+  });
+
+  it("generic CSV rejects ambiguous day/month dates", () => {
+    const a = makeDeps();
+    const r = importResultsCsv(a.repo, "basketball_nba", "date,home,away,home_score,away_score\n01/07/2024,A,B,1,2\n2024-07-01T19:00:00-04:00,A,B,3,4\n", "generic", "2026-01-01T00:00:00Z");
+    expect(r.imported).toBe(1);
+    expect(r.skipped[0].reason).toMatch(/YYYY-MM-DD/);
+    expect(a.repo.db.get<{ start_time: string }>("SELECT start_time FROM events")!.start_time).toBe("2024-07-01T23:00:00Z");
+  });
+
+  it("market caches pick up imported quotes without a restart", async () => {
+    const { MarketService } = await import("../../server/market");
+    const a = makeDeps();
+    const csv = TD_HEADER + "1,London,Wimbledon,01/07/2024,Grand Slam,Outdoor,Grass,1st Round,5,Djokovic N.,Kopriva V.,2,123,3,0,Completed,,\n";
+    importResultsCsv(a.repo, "tennis_atp", csv, "tennis-data", "2026-01-01T00:00:00Z");
+    const id = a.repo.db.get<{ id: string }>("SELECT id FROM events")!.id;
+    const m = new MarketService(a.repo, () => 150);
+    expect(m.homeProbAt(id)).toBeNull();
+    importResultsCsv(a.repo, "tennis_atp", csv.replace(",Completed,,", ",Completed,1.02,22.5"), "tennis-data", "2026-01-02T00:00:00Z");
+    expect(m.homeProbAt(id)).toBeGreaterThan(0.9);
+  });
+});

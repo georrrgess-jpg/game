@@ -93,6 +93,9 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
   const ingest = new LiveIngest(deps);
   const ai = new AiExplainer(db, cfg, () => settings.get(), log, now);
 
+  const filled = repo.backfillSeasons();
+  if (filled) log.add("info", "server", `Filled the season label of ${filled} older event(s).`);
+
   if (demoNeedsGeneration(repo)) {
     clearDemoWorld(repo);
     const r = generateDemoWorld(repo);

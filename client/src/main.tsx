@@ -1,4 +1,4 @@
-import { StrictMode, Suspense, lazy, useEffect } from "react";
+import { Component, StrictMode, Suspense, lazy, useEffect, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import "@fontsource-variable/inter";
@@ -32,12 +32,38 @@ function RouteFocus() {
   return null;
 }
 
+/** A rendering error in one page shows a message instead of a blank screen. Reset on navigation. */
+class PageErrorBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
+  override state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  override componentDidUpdate(prev: { resetKey: string }) {
+    if (prev.resetKey !== this.props.resetKey && this.state.error) this.setState({ error: null });
+  }
+  override render() {
+    if (this.state.error)
+      return (
+        <Empty title="This page hit an error">
+          {this.state.error.message}. Try another page or reload; the data on the server is unaffected.
+        </Empty>
+      );
+    return this.props.children;
+  }
+}
+
+function Boundary({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation();
+  return <PageErrorBoundary resetKey={pathname}>{children}</PageErrorBoundary>;
+}
+
 function App() {
   return (
     <BrowserRouter>
       <AppProvider>
         <RouteFocus />
         <Layout>
+          <Boundary>
           <Suspense fallback={<Loading />}>
             <Routes>
               <Route path="/" element={<TodayPage />} />
@@ -54,6 +80,7 @@ function App() {
               <Route path="*" element={<Empty title="Page not found">Use the navigation to continue.</Empty>} />
             </Routes>
           </Suspense>
+          </Boundary>
         </Layout>
       </AppProvider>
     </BrowserRouter>

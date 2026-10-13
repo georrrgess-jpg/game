@@ -135,11 +135,13 @@ export function seasonOf(sportKey: string, startIso: string): string {
   const month = Number(startIso.slice(5, 7));
   if (sportKey.startsWith("demo_")) return String(year); // fictional leagues run within a calendar year
   const fam = sportFamily(sportKey);
+  // Basketball (NBA, college, EuroLeague), American football (NFL, college bowls in January), ice hockey and
+  // most European soccer run autumn to spring. Summer leagues (WNBA, CFL, MLS, Brazil, Japan...) do not.
   const crossesNewYear =
-    sportKey === "basketball_nba" ||
-    sportKey === "americanfootball_nfl" ||
-    sportKey === "icehockey_nhl" ||
-    (fam === "soccer" && !sportKey.includes("usa_mls") && !sportKey.includes("brazil") && !sportKey.includes("japan"));
+    (fam === "basketball" && !sportKey.includes("wnba")) ||
+    (fam === "american_football" && !sportKey.includes("cfl") && !sportKey.includes("ufl")) ||
+    fam === "ice_hockey" ||
+    (fam === "soccer" && !/usa_mls|brazil|japan|china|korea|sweden|norway|finland|argentina|chile|league_of_ireland/.test(sportKey));
   if (!crossesNewYear) return String(year);
   // NFL seasons start in September (playoffs to February); NBA/NHL/soccer start Aug-Oct.
   return String(month >= 8 ? year : year - 1);
@@ -173,10 +175,11 @@ export function contractFromOddsApiMarket(sportKey: string, marketKey: string): 
       return fam === "soccer" ? "moneyline_3way_regulation" : "moneyline_2way_full_game";
     case "h2h_3_way":
       return "moneyline_3way_regulation";
+    // Tennis handicaps and totals are in games, but results are stored in sets: not supported.
     case "spreads":
-      return "spread_full_game";
+      return fam === "tennis" ? null : "spread_full_game";
     case "totals":
-      return "total_full_game";
+      return fam === "tennis" ? null : "total_full_game";
     default:
       return null;
   }

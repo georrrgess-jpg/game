@@ -411,6 +411,14 @@ function ExplainCard({ a }: { a: Analysis }) {
 const pctOr = (x: number | null | undefined, digits = 1) => (x == null ? "—" : formatPct(x, digits));
 const evText = (x: number | null | undefined) => (x == null ? "—" : `${x >= 0 ? "+" : "−"}${Math.abs(x * 100).toFixed(1)}%`);
 
+/** "home by 7.0 (fair home line −7.0)" or "221.4 points": never "+7" for a favourite. */
+function expectText(contract: string, x: number): string {
+  if (contract !== "spread_full_game") return `${x.toFixed(1)} points`;
+  const fair = -x;
+  const line = `${fair > 0 ? "+" : fair < 0 ? "−" : ""}${Math.abs(fair).toFixed(1)}`;
+  return `${x >= 0 ? "home by" : "away by"} ${Math.abs(x).toFixed(1)} (fair home line ${line})`;
+}
+
 function LinesCard({ a, names }: { a: Analysis; names: Partial<Record<Outcome, string>> }) {
   const lines = a.lines ?? [];
   const sideName = (l: NonNullable<Analysis["lines"]>[number], o: Outcome) => {
@@ -434,8 +442,8 @@ function LinesCard({ a, names }: { a: Analysis; names: Partial<Record<Outcome, s
                 {l.line}
                 {l.contract === "spread_full_game" ? " (home line)" : ""} · {l.booksQuoting} book{l.booksQuoting === 1 ? "" : "s"}
                 {l.isMainLine ? " · most-quoted line" : ""}
-                {l.modelExpected != null && ` · model expects ${l.contract === "spread_full_game" ? `home ${l.modelExpected >= 0 ? "+" : "−"}${Math.abs(l.modelExpected).toFixed(1)}` : `${l.modelExpected.toFixed(1)} points`}`}
-                {l.combinedExpected != null && `, sharpened ${l.contract === "spread_full_game" ? `${l.combinedExpected >= 0 ? "+" : "−"}${Math.abs(l.combinedExpected).toFixed(1)}` : l.combinedExpected.toFixed(1)} (${Math.round((l.combinedWeight ?? 0) * 100)}% model)`}
+                {l.modelExpected != null && ` · model expects ${expectText(l.contract, l.modelExpected)}`}
+                {l.combinedExpected != null && `; sharpened ${expectText(l.contract, l.combinedExpected)} (${Math.round((l.combinedWeight ?? 0) * 100)}% model)`}
               </caption>
               <thead>
                 <tr>

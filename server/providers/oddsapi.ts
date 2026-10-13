@@ -256,6 +256,10 @@ export class OddsApiProvider {
         continue;
       }
       events++;
+      // Is the stored event oriented the other way round from this feed (possible for tennis only)?
+      const stored = this.deps.repo.event(eventId);
+      const feedHome = this.resolveTeam(sportKey, e.home_team ?? "");
+      const swap = !!stored && !!feedHome && stored.away_id === feedHome && stored.home_id !== feedHome;
       for (const b of e.bookmakers) {
         books.add(`${b.key}|${b.title}`);
         for (const m of b.markets) {
@@ -266,7 +270,7 @@ export class OddsApiProvider {
           // Lines are stored from the home team's perspective; both sides must agree.
           let homeLine: number | null = null;
           if (contract === "spread_full_game") {
-            const h = m.outcomes.find((o) => o.name === e.home_team);
+            const h = m.outcomes.find((o) => o.name === (swap ? e.away_team : e.home_team));
             homeLine = h?.point ?? null;
             if (homeLine == null) continue;
           } else if (contract === "total_full_game") {
@@ -275,7 +279,7 @@ export class OddsApiProvider {
           }
           const mapped: { outcome: OutcomeKey; price: number }[] = [];
           for (const o of m.outcomes) {
-            const outcome = mapOutcome(o.name, e.home_team ?? "", e.away_team ?? "");
+            const outcome = mapOutcome(o.name, swap ? e.away_team ?? "" : e.home_team ?? "", swap ? e.home_team ?? "" : e.away_team ?? "");
             if (!outcome || !spec.outcomes.includes(outcome)) continue;
             if (contract === "spread_full_game") {
               const expected = outcome === "home" ? homeLine! : -homeLine!;
@@ -337,7 +341,10 @@ export class OddsApiProvider {
       if (h && a) {
         const found = new GameImporter(repo).findEvent(storeKey, h, a, commence, 150);
         const takenBy = found ? repo.db.get<{ provider_event_id: string }>("SELECT provider_event_id FROM event_links WHERE provider = ? AND event_id = ?", [ID, found.id]) : null;
-        if (found && !found.id.startsWith("oddsapi:") && (!takenBy || takenBy.provider_event_id === e.id) && found.home_id === h) {
+        // Tennis events may list the two players in the other order; quotes are then re-oriented on storage.
+        const sameOrder = found?.home_id === h && found?.away_id === a;
+        const swapped = sportFamily(storeKey) === "tennis" && found?.home_id === a && found?.away_id === h;
+        if (found && !found.id.startsWith("oddsapi:") && (!takenBy || takenBy.provider_event_id === e.id) && (sameOrder || swapped)) {
           repo.linkEvent(ID, e.id, found.id, "teams+start-time", retrievedAt);
           return found.id;
         }

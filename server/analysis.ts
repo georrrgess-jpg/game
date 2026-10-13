@@ -99,7 +99,8 @@ export class ModelService {
   fit(dataset: Dataset, sportKey: string, forecastSeason: string, asOf: string): FitResult {
     if (!modelSupportedSport(sportKey)) return { available: false, reason: "No validated independent model is implemented for this sport; only the market reference is shown." };
     const games = this.repo.finalsBefore(dataset, sportKey, asOf).filter((g) => (g.season ?? seasonOf(sportKey, g.start_time)) < forecastSeason);
-    const key = `${dataset}|${sportKey}|${forecastSeason}|${games.length}|${games[games.length - 1]?.id ?? ""}`;
+    // The market version is part of the key: imported quotes change the validation comparison and blends.
+    const key = `${dataset}|${sportKey}|${forecastSeason}|${games.length}|${games[games.length - 1]?.id ?? ""}|${this.markets.version()}`;
     const cached = this.fits.get(key);
     if (cached) return cached;
     const first = games[0]?.start_time ?? asOf;
@@ -130,7 +131,7 @@ export class ModelService {
    */
   trackRecord(dataset: Dataset, sportKey: string, fit: ModelFit, asOf: string): MarketTrackRecord {
     const finals = this.repo.finalsBefore(dataset, sportKey, asOf);
-    const key = `${dataset}|${sportKey}|${fit.version}|${finals.length}|${finals[finals.length - 1]?.id ?? ""}`;
+    const key = `${dataset}|${sportKey}|${fit.version}|${finals.length}|${finals[finals.length - 1]?.id ?? ""}|${this.markets.version()}`;
     const cached = this.records.get(key);
     if (cached) return cached;
     const schedule = this.repo.scheduleFor(dataset, sportKey, finals[0]?.start_time ?? asOf, asOf);

@@ -255,8 +255,27 @@ export class MarketService {
     private staleMinutes: () => number,
   ) {}
 
-  /** Quotes known `minutesBefore` the scheduled start (cached; historical snapshots never change). */
+  private seenVersion = "";
+
+  /** Changes whenever quotes or events are added (imports, refreshes); cheap (rowid look-ups). */
+  version(): string {
+    const v = this.repo.db.get<{ q: number | null; e: number | null }>("SELECT (SELECT MAX(id) FROM quotes) q, (SELECT MAX(rowid) FROM events) e")!;
+    return `${v.q ?? 0}|${v.e ?? 0}`;
+  }
+
+  /** Drop every cache when new data has arrived, so imports take effect without a restart. */
+  private sync(): void {
+    const v = this.version();
+    if (v === this.seenVersion) return;
+    this.seenVersion = v;
+    this.snapshots.clear();
+    this.configs.clear();
+    this.seasonCache.clear();
+  }
+
+  /** Quotes known `minutesBefore` the scheduled start (cached until new data arrives). */
   snapshot(eventId: string, startIso: string, minutesBefore: number): { quotes: QuoteRecord[]; t: string } {
+    this.sync();
     const t = toUtcIso(Date.parse(startIso) - minutesBefore * 60000);
     const key = `${eventId}|${t}`;
     let q = this.snapshots.get(key);
@@ -293,10 +312,11 @@ export class MarketService {
    * When `asOf` is given and that season was not complete by then, the defaults are used (no leakage).
    */
   configFor(dataset: Dataset, sportKey: string, season: string, contract: ContractKey, asOf?: string): MarketConfig {
+    this.sync();
     const p = this.previousSeason(dataset, sportKey, season);
     if (!p || (asOf && p.last > asOf)) return DEFAULT_MARKET_CONFIG;
     const prev = p.s;
-    const key = `${dataset}|${sportKey}|${season}|${prev}|${contract}`;
+    const key = `${dataset}|${sportKey}|${season}|${prev}|${p.last}|${contract}`;
     const cached = this.configs.get(key);
     if (cached) return cached;
     const cfg = this.learn(dataset, sportKey, prev, season, contract);
