@@ -33,7 +33,9 @@ Open **http://127.0.0.1:5180**. On first start the app generates the fictional d
 | `npm run typecheck` | TypeScript check of server, client and tests |
 
 Configuration lives in `.env` (copy `.env.example`). Stop the app with **Ctrl+C**. To start from
-scratch, stop the app and delete the `data/` folder.
+scratch, stop the app and delete the `data/` folder. With connected providers the database grows
+with each odds refresh; at default settings that is very roughly 1–3 MB per active day, bounded by
+the daily credit cap. Forecasts are immutable, so trimming history means starting a new data folder.
 
 ---
 
