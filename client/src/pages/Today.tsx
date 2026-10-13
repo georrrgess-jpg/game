@@ -136,7 +136,7 @@ export function TodayPage() {
 
       {steps && steps.length > 0 && (
         <div className="card card-tight" aria-live="polite">
-          <h3>Refresh results</h3>
+          <h2 style={{ fontSize: "1rem" }}>Refresh results</h2>
           <ul className="list-plain small">
             {steps.map((s, i) => (
               <li key={i} className="row" style={{ alignItems: "flex-start", flexWrap: "nowrap" }}>
@@ -339,13 +339,13 @@ function LikelyView({ items }: { items: BoardItem[] }) {
           <article key={i.eventId} className={`game-card${i.voided ? " voided" : ""}`} style={{ animationDelay: `${Math.min(idx, 10) * 30}ms` }} aria-labelledby={`g-${i.eventId}`}>
             <div className="stack-sm">
               <div className="row" style={{ gap: 8 }}>
-                <h3 className="teams" id={`g-${i.eventId}`} style={{ margin: 0 }}>
+                <h2 className="teams" id={`g-${i.eventId}`} style={{ margin: 0 }}>
                   <Link to={`/games/${encodeURIComponent(i.eventId)}`}>
                     {i.away}
                     <span className="at">at</span>
                     {i.home}
                   </Link>
-                </h3>
+                </h2>
                 <StatusChip i={i} />
                 {i.evidence.conflicts > 0 && (
                   <span className="chip chip-warn">
@@ -444,7 +444,7 @@ function PriceView({ items, outcome, setOutcome }: { items: BoardItem[]; outcome
       <Callout kind="info">
         Each price is the <strong>highest quoted price among connected sources</strong> at the stated time, for the same contract only. It is not a recommendation: a high price usually reflects a low probability. Stale quotes are excluded.
       </Callout>
-      <div className="table-wrap">
+      <div className="table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -516,10 +516,10 @@ function GapView({ items }: { items: BoardItem[] }) {
   return (
     <div className="stack-sm" style={{ gap: 12 }}>
       <Callout kind={leads ? "info" : "warn"} title={leads ? `${leads} research lead(s).` : "No credible model–market differences."}>
-        Ranked by the size of the gap between the independent model and the margin-adjusted market reference. The verdict accounts for the model's uncertainty and whether it has ever beaten the market in validation. A difference alone is not evidence of an edge.
+        Ranked by the size of the gap between the independent model and the margin-adjusted market reference. The verdict accounts for the model's uncertainty and whether it has beaten the market on out-of-sample games. A difference alone is not evidence of an edge.
       </Callout>
       {withGap.length > 0 && (
-        <div className="table-wrap">
+        <div className="table-wrap" tabIndex={0}>
           <table>
             <thead>
               <tr>
@@ -567,7 +567,7 @@ function GapView({ items }: { items: BoardItem[] }) {
       )}
       {without.length > 0 && (
         <div className="card card-tight">
-          <h3>Insufficient evidence ({without.length})</h3>
+          <h2 style={{ fontSize: "1rem" }}>Insufficient evidence ({without.length})</h2>
           <ul className="list-plain small">
             {without.map((i) => (
               <li key={i.eventId}>

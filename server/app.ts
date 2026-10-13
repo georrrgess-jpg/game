@@ -58,12 +58,12 @@ export interface AppContext {
 const datasetSchema = z.enum(["demo", "live"]).default("demo");
 const isoInstant = z.string().max(40).refine((s) => {
   try {
-    toUtcIso(s);
-    return true;
+    const y = Number(toUtcIso(s).slice(0, 4));
+    return /^\d{4}-/.test(toUtcIso(s)) && y >= 2000 && y <= 2100;
   } catch {
     return false;
   }
-}, "Invalid timestamp");
+}, "Invalid timestamp (expected an ISO date-time between 2000 and 2100)");
 
 class HttpProblem extends Error {
   constructor(
@@ -108,13 +108,13 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
         const steps = await ingest.refreshDay(date);
         const ctx = liveCtx();
         const board = buildBoard(analysisDeps, ctx, date);
-        const snap = classroom.recordSystemSnapshot("live", board.analyses, now().toISOString(), randomUUID());
+        const snap = classroom.recordSystemSnapshot("live", board.analyses, toUtcIso(now()), randomUUID());
         return `${steps.filter((s) => s.ok).length}/${steps.length} steps ok; ${board.items.length} games; recorded ${snap.recorded} forecasts and ${snap.abstentions} abstentions.`;
       },
       odds_refresh: async () => {
         const date = liveToday();
         const { startUtc, endUtc } = localDayBounds(date, settings.get().timezone);
-        const upcoming = repo.eventsInWindow("live", startUtc, endUtc, now().toISOString()).filter((e) => e.status === "scheduled");
+        const upcoming = repo.eventsInWindow("live", startUtc, endUtc, toUtcIso(now())).filter((e) => e.status === "scheduled");
         if (!upcoming.length && repo.db.get("SELECT 1 FROM events WHERE dataset = 'live' LIMIT 1")) return "No upcoming games today; skipped to save credits.";
         const r = await ingest.refreshOddsOnly();
         return r.map((x) => `${x.step}: ${x.ok ? x.detail : `failed (${x.detail})`}`).join("; ") || "No sports configured.";
@@ -150,8 +150,8 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
     let mode: AnalysisContext["mode"] = dataset === "demo" ? "demo" : "live";
     if (q.asOf != null && q.asOf !== "") {
       asOf = toUtcIso(isoInstant.parse(q.asOf));
-      if (asOf > clock) throw new HttpProblem(400, "Replay time cannot be later than the current clock: future information is not available.");
-      if (asOf < clock) mode = "replay";
+      if (Date.parse(asOf) > Date.parse(clock)) throw new HttpProblem(400, "Replay time cannot be later than the current clock: future information is not available.");
+      if (Date.parse(asOf) < Date.parse(clock)) mode = "replay";
     }
     return { dataset, asOf, zone: s.timezone, staleMinutes: s.staleQuoteMinutes, discrepancyMinPoints: s.discrepancyMinPoints, mode };
   }
@@ -161,7 +161,12 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
   /** Instructor "hide results" masks final scores everywhere for classroom use. */
   function maskAnalysis(a: GameAnalysis): GameAnalysis {
     if (!resultsHidden() || !a.status.resultKnown) return a;
-    return { ...a, event: { ...a.event, home_score: null, away_score: null }, status: { ...a.status, resultKnown: false }, resultHidden: true } as GameAnalysis;
+    return {
+      ...a,
+      event: { ...a.event, status: "final", home_score: null, away_score: null, regulation_home: null, regulation_away: null, final_at: null, status_at: null, extra: "{}" },
+      status: { ...a.status, resultKnown: false },
+      resultHidden: true,
+    } as GameAnalysis;
   }
 
   // ---------------------------------------------------------------- Fastify
@@ -184,7 +189,8 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
     if (!cfg.allowRemote && !allowedHosts.has(host)) {
       return reply.code(421).type("text/plain").send("Misdirected request: unexpected Host header.");
     }
-    if (req.method !== "GET" && req.method !== "HEAD" && req.url.startsWith("/api/")) {
+    // Applies to EVERY state-changing request regardless of path, so encoded paths (e.g. /%61pi/...) cannot slip past.
+    if (req.method !== "GET" && req.method !== "HEAD") {
       // CSRF protection: browsers cannot send this custom header cross-origin without a CORS preflight, which we never approve.
       if (req.headers["x-overround-client"] !== "1") return reply.code(403).send({ error: "Missing client header." });
       const origin = req.headers.origin;
@@ -336,7 +342,7 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
     let detail: string;
     switch (id) {
       case "oddsapi": {
-        const sports = await ingest.odds.listSports();
+        const sports = await ingest.odds.listSports(true);
         detail = `Key accepted. ${sports.filter((s) => s.active).length} active sports listed (this call is free).`;
         break;
       }
@@ -476,13 +482,14 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
     const id = (req.params as { id: string }).id;
     const a = getAnalysis(id, ctx);
     const contractId = typeof q.contractId === "string" && q.contractId ? q.contractId : a.market.contractId;
-    const rows = repo.quoteHistory(id, contractId, ctx.asOf);
+    // Pre-game only: in-play prices after the scheduled start can reveal the result.
+    const rows = repo.quoteHistory(id, contractId, a.infoAsOf);
     return {
       eventId: id,
       contractId,
       asOf: ctx.asOf,
       start: a.event.start_time,
-      points: rows.map((r) => ({ book: r.book_title, book_key: r.book_key, outcome: r.outcome, decimal: r.price_decimal, source_time: r.source_time, retrieved_at: r.retrieved_at, known_at: r.known_at })),
+      points: rows.map((r) => ({ book: r.book_title, book_key: r.book_key, outcome: r.outcome, decimal: r.price_decimal, source_time: r.source_time, retrieved_at: r.known_at, known_at: r.known_at })),
     };
   });
 
@@ -575,14 +582,14 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
     const events = repo.eventsInWindow(ctx.dataset, startUtc, endUtc, ctx.asOf);
     const teamIds = [...new Set(events.flatMap((e) => [e.home_id, e.away_id]))];
     const names = new Map(teamIds.map((id) => [id, repo.participant(id)?.name ?? id]));
-    const since = new Date(Date.parse(ctx.asOf) - 7 * 86400000).toISOString();
+    const since = toUtcIso(Date.parse(ctx.asOf) - 7 * 86400000);
     const news = repo.newsAsOf(ctx.dataset, ctx.asOf, { sinceUtc: since, limit: 300 });
     const relevantNews = q.scope === "all" ? news : news.filter((n) => json<string[]>(n.participant_ids, []).some((id) => names.has(id)));
     const injuries = repo.injuriesAsOf(ctx.dataset, teamIds, ctx.asOf);
     const recentInjuryRows = teamIds.length
       ? db.all(
           `SELECT * FROM injuries WHERE dataset = ? AND participant_id IN (${teamIds.map(() => "?").join(",")}) AND retrieved_at <= ? AND retrieved_at >= ? AND status != 'active'`,
-          [ctx.dataset, ...teamIds, ctx.asOf, new Date(Date.parse(ctx.asOf) - 72 * 3600000).toISOString()],
+          [ctx.dataset, ...teamIds, ctx.asOf, toUtcIso(Date.parse(ctx.asOf) - 72 * 3600000)],
         )
       : [];
     const conflicts = detectConflicts(relevantNews, [...injuries, ...(recentInjuryRows as any[])], ctx.asOf);
@@ -714,9 +721,12 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
       .parse(req.body);
     const ctx = ctxFrom({ dataset: body.dataset, asOf: body.asOf });
     const a = getAnalysis(body.eventId, ctx);
-    const f = classroom.saveStudentForecast({ dataset: body.dataset, sessionId: body.sessionId, author: body.author, analysis: a, probs: body.probs, createdAt: toUtcIso(now()), notes: body.notes });
+    const clock = clockFor(ctx.dataset);
+    // Validate a points entry before saving anything, so a refused entry never leaves a half-done request.
+    if (body.stake) classroom.checkEntryAllowed(body.stake.experimentId, body.author, a.event.start_time, clock);
+    const f = classroom.saveStudentForecast({ dataset: body.dataset, sessionId: body.sessionId, author: body.author, analysis: a, probs: body.probs, createdAt: toUtcIso(now()), clock, notes: body.notes });
     let entryId: string | null = null;
-    if (body.stake) entryId = classroom.addEntry(body.stake.experimentId, f.id, body.stake.outcome, body.stake.points, toUtcIso(now()));
+    if (body.stake) entryId = classroom.addEntry(body.stake.experimentId, f.id, body.stake.outcome, body.stake.points, toUtcIso(now()), clock);
     return { forecast: { id: f.id, created_at: f.created_at, info_as_of: f.info_as_of, pick: f.pick, quoted_price: f.quoted_price }, entryId };
   });
 
@@ -729,7 +739,10 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
 
   app.post("/api/experiments/:id/entries", async (req) => {
     const body = z.object({ forecastId: z.string().uuid(), outcome: z.enum(["home", "away", "draw"]), stake: z.number().positive().max(10) }).parse(req.body);
-    return { id: classroom.addEntry((req.params as { id: string }).id, body.forecastId, body.outcome, body.stake, toUtcIso(now())) };
+    const id = (req.params as { id: string }).id;
+    const exp = db.get<{ dataset: Dataset }>("SELECT dataset FROM experiments WHERE id = ?", [id]);
+    if (!exp) throw new HttpProblem(404, "Unknown experiment");
+    return { id: classroom.addEntry(id, body.forecastId, body.outcome, body.stake, toUtcIso(now()), clockFor(exp.dataset)) };
   });
 
   app.get("/api/experiments/:id", async (req) => {

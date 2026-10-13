@@ -40,7 +40,8 @@ export function toUtcIso(input: string | Date | number): string {
         ? DateTime.fromMillis(input)
         : DateTime.fromISO(input, { setZone: true });
   if (!dt.isValid) throw new RangeError(`Invalid timestamp: ${String(input)}`);
-  return dt.toUTC().toISO({ suppressMilliseconds: true })!;
+  // Whole seconds only, so ISO strings always sort chronologically.
+  return dt.toUTC().set({ millisecond: 0 }).toISO({ suppressMilliseconds: true })!;
 }
 
 /** Parse a timestamp leniently (ISO or RFC 2822 as used by RSS); null if unparseable. */
@@ -51,7 +52,7 @@ export function parseTimestamp(input: unknown): string | null {
   if (!dt.isValid) dt = DateTime.fromRFC2822(s, { setZone: true });
   if (!dt.isValid) dt = DateTime.fromHTTP(s, { setZone: true });
   if (!dt.isValid) return null;
-  return dt.toUTC().toISO({ suppressMilliseconds: true });
+  return dt.toUTC().set({ millisecond: 0 }).toISO({ suppressMilliseconds: true });
 }
 
 export function minutesBetween(aIso: string, bIso: string): number {

@@ -78,6 +78,14 @@ describe("MLB Stats API adapter", () => {
     expect(repo.event("mlb:800004")!.status).toBe("in_progress"); // "Game Over" is not an official final
     expect(repo.event("mlb:800004")!.home_score).toBeNull();
     expect(repo.event("mlb:800005")!.status).toBe("suspended");
+    // The postponement stays visible on its original date for replays.
+    const original = repo.event("mlb:800001@2026-06-15")!;
+    expect(original.status).toBe("postponed");
+    expect(original.start_time).toBe("2026-06-15T23:05:00Z");
+    // An unhydrated history import must not erase venue roof information.
+    repo.db.run("UPDATE events SET indoor = 1 WHERE id = 'mlb:800002'");
+    mlb.ingestSchedule({ dates: [{ date: "2026-06-16", games: [{ gamePk: 800002, gameDate: "2026-06-16T23:05:00Z", status: { abstractGameState: "Preview", detailedState: "Scheduled" }, teams: { home: { team: { id: 147 } }, away: { team: { id: 111 } } } }] }] }, "2026-06-16T15:00:00Z");
+    expect(repo.event("mlb:800002")!.indoor).toBe(1);
     const lineups = repo.lineupsAsOf("mlb:800001", "2026-06-16T16:00:00Z");
     expect(lineups.find((l) => l.participant_id === "mlb-team:147")?.status).toBe("confirmed");
     expect(lineups.find((l) => l.participant_id === "mlb-team:111")?.status).toBe("probable");
@@ -116,6 +124,8 @@ describe("The Odds API adapter", () => {
     expect(oddsApiCost(2, 4, 12)).toBe(4); // bookmakers count in groups of 10
     expect(soccerLeagueFinalIsRegulation("soccer_epl")).toBe(true);
     expect(soccerLeagueFinalIsRegulation("soccer_fa_cup")).toBe(false);
+    expect(soccerLeagueFinalIsRegulation("soccer_usa_mls")).toBe(false); // play-offs can go to extra time
+    expect(soccerLeagueFinalIsRegulation("soccer_efl_champ")).toBe(false);
     expect(soccerLeagueFinalIsRegulation("baseball_mlb")).toBe(false);
   });
 
@@ -134,6 +144,10 @@ describe("The Odds API adapter", () => {
     const quotes = repo.latestQuotes("mlb:800002", "2026-06-16T16:00:00Z");
     expect(quotes.length).toBeGreaterThan(0);
     expect(repo.latestQuotes("mlb:800001", "2026-06-16T16:00:00Z")).toHaveLength(0);
+    // A second odds event for the same pair and start cannot attach to the already-linked game.
+    const dup = JSON.parse(fixture("oddsapi-odds-mlb.json"))[0];
+    dup.id = "another-provider-event";
+    expect(odds.matchOrCreateEvent("baseball_mlb", dup, "2026-06-16T15:00:00Z")).toBeNull();
     const ml = quotes.filter((q) => q.contract === "moneyline_2way_full_game");
     expect(new Set(ml.map((q) => q.book_key))).toEqual(new Set(["draftkings", "fanduel"])); // malformed book rejected
     const spreads = quotes.filter((q) => q.contract === "spread_full_game");
@@ -206,6 +220,26 @@ describe("The Odds API adapter", () => {
     expect(m).toBe(3);
     expect(providerStatus(b.db, "oddsapi")!.consecutive_failures).toBe(1);
     expect(providerStatus(b.db, "oddsapi")!.last_error).not.toContain("test-key-123456");
+  });
+
+  it("historical snapshot quotes go stale relative to the replay time, and their events exist in replay", async () => {
+    const hist = { timestamp: "2026-08-19T14:00:00Z", data: JSON.parse(fixture("oddsapi-odds-epl.json")) };
+    const t = fakeTransport([{ match: /historical/, respond: () => ok(JSON.stringify(hist), { ...QUOTA, "x-requests-last": "10" }) }]);
+    const a = makeDeps({ transport: t, now: new Date("2026-09-01T12:00:00Z"), settings: { providers: { oddsapi: { enabled: true, allowHistorical: true, dailyCreditCap: 100 } } } });
+    await new OddsApiProvider(a.deps).historicalSnapshot("soccer_epl", "2026-08-19T14:00:00Z");
+    const ev = a.repo.event("oddsapi:a1b2c3")!;
+    expect(ev.known_at).toBe("2026-08-19T14:00:00Z");
+    // Kick-off minus one hour, three days after the snapshot: visible in replay, but quotes are stale.
+    const asOf = "2026-08-22T13:00:00Z";
+    expect(a.repo.eventsInWindow("live", "2026-08-22T00:00:00Z", "2026-08-23T00:00:00Z", asOf).map((e) => e.id)).toEqual(["oddsapi:a1b2c3"]);
+    const { buildMarket } = await import("../../server/analysis");
+    const m = buildMarket(a.repo.latestQuotes(ev.id, asOf), "moneyline_3way_regulation", null, ev, asOf, 150);
+    expect(m.books[0].status).toBe("stale");
+    expect(m.reference).toBeNull();
+    expect(m.bestPrice.home).toBeUndefined();
+    // At the snapshot time itself the same quotes are current.
+    const m2 = buildMarket(a.repo.latestQuotes(ev.id, "2026-08-19T14:30:00Z"), "moneyline_3way_regulation", null, ev, "2026-08-19T14:30:00Z", 150);
+    expect(m2.books[0].status).toBe("current");
   });
 
   it("stores historical snapshots with the snapshot time as information time (only when allowed)", async () => {

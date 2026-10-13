@@ -15,11 +15,12 @@ import {
   proportionalNoVig,
   sigmoid,
 } from "../shared/odds";
-import { minutesBetween } from "../shared/time";
+import { minutesBetween, toUtcIso } from "../shared/time";
 import type { Dataset, EventRecord, InjuryRecord, LineupRecord, NewsRecord, QuoteRecord, Repo, WeatherRecord } from "./repo";
 import { eventAsOf } from "./repo";
 import { json } from "./db";
-import { fitModel, predictGame, ratingsAt, restDiffFor, type FitResult, type ModelFit, type ModelPrediction, type EloState } from "./model";
+import { fitModel, linearPredictor, predictGame, ratingsAt, restDiffFor, runElo, type FitResult, type ModelFit, type ModelPrediction, type EloState } from "./model";
+import { logLoss, pairedBootstrapCI } from "../shared/evaluation";
 import { detectConflicts, type Conflict } from "./news";
 
 export interface AnalysisContext {
@@ -32,6 +33,13 @@ export interface AnalysisContext {
 }
 
 export const MODEL_SPORTS = new Set(["demo_baseball", "baseball_mlb"]);
+export const HOLDOUT_MIN_GAMES = 200;
+
+export interface MarketTrackRecord {
+  source: "holdout" | "validation";
+  n: number;
+  ci: { mean: number; low: number; high: number } | null;
+}
 const COMPARABLE_MINUTES = 5;
 
 export function primaryContract(sportKey: string): ContractKey {
@@ -42,7 +50,7 @@ export function primaryContract(sportKey: string): ContractKey {
 export interface BookQuoteView {
   book_key: string;
   book_title: string;
-  outcomes: Partial<Record<OutcomeKey, { decimal: number; american: number; rawImplied: number; source_time: string; retrieved_at: string }>>;
+  outcomes: Partial<Record<OutcomeKey, { decimal: number; american: number; rawImplied: number; source_time: string; retrieved_at: string; known_at: string }>>;
   complete: boolean;
   comparable: boolean;
   fresh: boolean;
@@ -95,6 +103,7 @@ export function buildMarket(
         rawImplied: impliedProbability(q.price_decimal),
         source_time: q.source_time,
         retrieved_at: q.retrieved_at,
+        known_at: q.known_at,
       };
     }
     const present = spec.outcomes.filter((o) => outcomes[o]);
@@ -104,11 +113,13 @@ export function buildMarket(
     const comparable = complete && minutesBetween(times[0], newest!) <= COMPARABLE_MINUTES;
     // Freshness = time since the quote was last confirmed by a retrieval (a price can stay unchanged
     // for hours and still be current). The source time shows when the book last changed it.
-    const retrievals = present.map((o) => outcomes[o]!.retrieved_at).sort();
+    // known_at is the information time (equal to the retrieval time for live polling, and to the snapshot
+    // time for imported historical snapshots), so replays measure freshness correctly.
+    const retrievals = present.map((o) => outcomes[o]!.known_at).sort();
     const oldestConfirmation = retrievals[0] ?? null;
     const ageMinutes = oldestConfirmation ? minutesBetween(oldestConfirmation, asOf) : null;
     const afterStart = newest != null && newest >= event.start_time;
-    const fresh = !afterStart && ageMinutes != null && ageMinutes <= staleMinutes;
+    const fresh = !afterStart && ageMinutes != null && ageMinutes >= 0 && ageMinutes <= staleMinutes;
     let overround: number | null = null;
     let noVig: BookQuoteView["noVig"] = null;
     if (complete && comparable) {
@@ -170,8 +181,8 @@ export function buildMarket(
     for (const b of books) {
       const q = b.outcomes[o];
       if (!q || b.status === "after_start") continue;
-      const age = minutesBetween(q.retrieved_at, asOf);
-      if (age > staleMinutes) continue;
+      const age = minutesBetween(q.known_at, asOf);
+      if (age > staleMinutes || age < 0) continue;
       if (!best || q.decimal > best.decimal) {
         best = {
           decimal: q.decimal,
@@ -179,7 +190,7 @@ export function buildMarket(
           book_title: b.book_title,
           book_key: b.book_key,
           source_time: q.source_time,
-          retrieved_at: q.retrieved_at,
+          retrieved_at: q.known_at,
           label: `Highest quoted price among connected sources as of ${asOf}`,
         };
       }
@@ -236,6 +247,41 @@ export class ModelService {
     return st;
   }
 
+  private records = new Map<string, MarketTrackRecord>();
+
+  /**
+   * How the model has fared against the market. Prefers the walk-forward holdout (this season's games
+   * before the information time, with parameters fixed beforehand); falls back to the validation season,
+   * which is optimistic because the model's settings were chosen on it.
+   */
+  trackRecord(dataset: Dataset, sportKey: string, fit: ModelFit, asOf: string): MarketTrackRecord {
+    const finals = this.repo.finalsBefore(dataset, sportKey, asOf);
+    const key = `${dataset}|${sportKey}|${fit.version}|${finals.length}|${finals[finals.length - 1]?.id ?? ""}`;
+    const cached = this.records.get(key);
+    if (cached) return cached;
+    const schedule = this.repo.scheduleFor(dataset, sportKey, finals[0]?.start_time ?? asOf, asOf);
+    const { rows } = runElo(finals, fit.params, schedule);
+    const llModel: number[] = [];
+    const llMarket: number[] = [];
+    for (const r of rows) {
+      if (r.season !== fit.forecastSeason) continue;
+      const pk = this.marketHomeAt(r.id, r.start_time);
+      if (pk == null || pk <= 0 || pk >= 1) continue;
+      llModel.push(logLoss(sigmoid(linearPredictor(fit.beta, r.x)), r.y));
+      llMarket.push(logLoss(pk, r.y));
+    }
+    let rec: MarketTrackRecord;
+    if (llModel.length >= HOLDOUT_MIN_GAMES) {
+      rec = { source: "holdout", n: llModel.length, ci: pairedBootstrapCI(llModel, llMarket) };
+    } else {
+      const v = fit.validationMetrics;
+      rec = { source: "validation", n: v.market?.n ?? 0, ci: v.modelMinusMarketLogLoss };
+    }
+    if (this.records.size > 100) this.records.clear();
+    this.records.set(key, rec);
+    return rec;
+  }
+
   predict(
     ctx: { dataset: Dataset; asOf: string },
     e: EventRecord,
@@ -245,7 +291,7 @@ export class ModelService {
     const fit = this.fit(ctx.dataset, e.sport_key, season, ctx.asOf);
     if (!fit.available) return { fit, prediction: null, restDiff: null };
     const st = this.state(ctx.dataset, e.sport_key, fit, ctx.asOf);
-    const from = new Date(Date.parse(e.start_time) - 20 * 86400000).toISOString();
+    const from = toUtcIso(Date.parse(e.start_time) - 20 * 86400000);
     const schedule = this.repo.scheduleFor(ctx.dataset, e.sport_key, from, e.start_time);
     const restDiff = overrides.restDiff ?? restDiffFor(schedule, e.home_id, e.away_id, e.start_time);
     let state = st;
@@ -405,10 +451,11 @@ export function analyzeEvent(deps: AnalysisDeps, ctx: AnalysisContext, eventId: 
   // ---- discrepancy verdicts ----
   let discrepancy: GameAnalysis["discrepancy"] = null;
   let overall: GameAnalysis["overallVerdict"];
-  const vm = fitAvail?.validationMetrics;
-  if (model.probs && market.reference) {
+  if (model.probs && market.reference && fitAvail) {
     discrepancy = {};
-    const ci = vm?.modelMinusMarketLogLoss ?? null;
+    const record = deps.models.trackRecord(ctx.dataset, e.sport_key, fitAvail, infoAsOf);
+    const ci = record.ci;
+    const where = record.source === "holdout" ? `On this season's ${record.n} earlier games (out of sample)` : `On the validation season (${record.n} games; optimistic, because the model's settings were chosen there)`;
     for (const o of spec.outcomes) {
       const diff = model.probs[o]! - market.reference.probs[o]!;
       const iv = model.interval80![o]!;
@@ -424,11 +471,14 @@ export function analyzeEvent(deps: AnalysisDeps, ctx: AnalysisContext, eventId: 
         verdict = "no_credible_difference";
         reason =
           ci.mean >= 0
-            ? `In validation the market reference had lower log loss than the model (difference ${ci.mean.toFixed(3)}, 95% interval ${ci.low.toFixed(3)} to ${ci.high.toFixed(3)}), so differences are treated as model error, not opportunity.`
-            : `In validation the model's advantage over the market was not statistically clear (95% interval ${ci.low.toFixed(3)} to ${ci.high.toFixed(3)} includes zero).`;
+            ? `${where}, the market reference had lower log loss than the model (difference ${ci.mean.toFixed(3)}, 95% interval ${ci.low.toFixed(3)} to ${ci.high.toFixed(3)}), so differences are treated as model error, not opportunity.`
+            : `${where}, the model's advantage over the market was not statistically clear (95% interval ${ci.low.toFixed(3)} to ${ci.high.toFixed(3)} includes zero).`;
+      } else if (record.source === "validation") {
+        verdict = "insufficient_evidence";
+        reason = `${where}, the model beat the market, but that has not yet been confirmed on enough out-of-sample games (${HOLDOUT_MIN_GAMES} needed).`;
       } else if (bigEnough && outsideInterval) {
         verdict = "research_lead";
-        reason = "The difference exceeds the model's stated uncertainty and the minimum threshold, and the model beat the market in validation. Treat it as a research lead, not a prediction of profit.";
+        reason = `The difference exceeds the model's stated uncertainty and the minimum threshold, and ${where.charAt(0).toLowerCase() + where.slice(1)} the model beat the market. Treat it as a research lead, not a prediction of profit.`;
       } else {
         verdict = "no_credible_difference";
         reason = `The difference (${formatPctPoints(diff)}) is within the model's uncertainty or below the ${formatPctPoints(ctx.discrepancyMinPoints)} threshold.`;
@@ -470,10 +520,10 @@ export function analyzeEvent(deps: AnalysisDeps, ctx: AnalysisContext, eventId: 
   const injuries = deps.repo.injuriesAsOf(ctx.dataset, teamIds, infoAsOf).map((i) => ({ ...i, team_name: teamName(i.participant_id) }));
   const allInjuryRecords = deps.repo.db.all<InjuryRecord>(
     "SELECT * FROM injuries WHERE dataset = ? AND participant_id IN (?, ?) AND retrieved_at <= ? AND retrieved_at >= ?",
-    [ctx.dataset, e.home_id, e.away_id, infoAsOf, new Date(Date.parse(infoAsOf) - 72 * 3600000).toISOString()],
+    [ctx.dataset, e.home_id, e.away_id, infoAsOf, toUtcIso(Date.parse(infoAsOf) - 72 * 3600000)],
   );
   const lineups = deps.repo.lineupsAsOf(e.id, infoAsOf).map((l) => ({ ...l, team_name: teamName(l.participant_id), playersParsed: json<{ name: string; position?: string }[]>(l.players, []) }));
-  const since = new Date(Date.parse(infoAsOf) - 7 * 86400000).toISOString();
+  const since = toUtcIso(Date.parse(infoAsOf) - 7 * 86400000);
   const rawNews = deps.repo.newsAsOf(ctx.dataset, infoAsOf, { teamIds, sinceUtc: since, limit: 40 });
   const news = groupDuplicates(rawNews);
   const wRel = weatherRelevant(e.sport_key) && !e.indoor;

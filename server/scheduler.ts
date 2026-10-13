@@ -2,6 +2,7 @@
 // closing the app stops all scans, and missed runs are not back-filled automatically.
 
 import { DateTime } from "luxon";
+import { toUtcIso } from "../shared/time";
 import type { Db } from "./db";
 import type { ActivityLog } from "./activity";
 import type { Settings } from "./settings";
@@ -97,7 +98,7 @@ export class Scheduler {
 
   async tick(): Promise<void> {
     if (this.settings().scheduler.paused) return;
-    const nowIso = this.now().toISOString();
+    const nowIso = toUtcIso(this.now());
     const due = this.db.all<JobRow>("SELECT * FROM jobs WHERE next_run_at IS NOT NULL AND next_run_at <= ?", [nowIso]);
     for (const j of due) {
       if (this.running.has(j.name)) continue;

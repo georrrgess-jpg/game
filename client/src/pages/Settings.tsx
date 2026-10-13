@@ -470,7 +470,7 @@ function SchedulerPanel({ s, reload }: { s: SettingsResp; reload: () => void }) 
             </div>
           </div>
           <p className="subtle small">Process started {fmtDateTime(sched.processStartedAt, st.timezone)} · times in {sched.timezone}</p>
-          <div className="table-wrap">
+          <div className="table-wrap" tabIndex={0}>
             <table>
               <thead>
                 <tr>
@@ -550,7 +550,7 @@ function SchedulerPanel({ s, reload }: { s: SettingsResp; reload: () => void }) 
         ) : !activity.entries.length ? (
           <p className="subtle">No activity yet.</p>
         ) : (
-          <div className="table-wrap" style={{ maxHeight: 460, overflow: "auto" }}>
+          <div className="table-wrap" tabIndex={0} style={{ maxHeight: 460, overflow: "auto" }}>
             <table>
               <thead>
                 <tr>

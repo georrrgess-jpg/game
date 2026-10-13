@@ -66,7 +66,7 @@ export default function GamesPage() {
           <h2 id={`d-${d}`} style={{ fontSize: "1rem" }}>
             {fmtDate(d)} {d === today && <span className="chip chip-info">today</span>}
           </h2>
-          <div className="table-wrap">
+          <div className="table-wrap" tabIndex={0}>
             <table>
               <thead>
                 <tr>

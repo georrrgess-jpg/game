@@ -68,7 +68,7 @@
   --warn-soft: rgba(237, 161, 0, 0.14);
   --danger: #b42318;
   --danger-soft: rgba(180, 35, 24, 0.08);
-  --good: #1f7a3d;
+  --good: #17652f;
   --good-soft: rgba(31, 122, 61, 0.1);
   --info: #1d5fbf;
   --info-soft: rgba(29, 95, 191, 0.08);
@@ -104,7 +104,7 @@
     --warn-soft: rgba(237, 161, 0, 0.14);
     --danger: #b42318;
     --danger-soft: rgba(180, 35, 24, 0.08);
-    --good: #1f7a3d;
+    --good: #17652f;
     --good-soft: rgba(31, 122, 61, 0.1);
     --info: #1d5fbf;
     --info-soft: rgba(29, 95, 191, 0.08);
@@ -811,7 +811,8 @@ input[type="range"] {
   box-shadow: var(--shadow);
 }
 .game-card.voided {
-  opacity: 0.7;
+  border-style: dashed;
+  background: var(--panel-2);
 }
 .teams {
   font-family: var(--font-display);

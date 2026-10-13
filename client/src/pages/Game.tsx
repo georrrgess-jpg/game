@@ -154,7 +154,7 @@ function EstimatesCard({ a, names }: { a: Analysis; names: Partial<Record<Outcom
       {a.expectedPoints && Object.keys(a.expectedPoints).length > 0 && (
         <div style={{ marginTop: 14 }}>
           <h3>Classroom simulation: expected net points per 1-point stake</h3>
-          <div className="table-wrap">
+          <div className="table-wrap" tabIndex={0}>
             <table>
               <thead>
                 <tr>
@@ -192,7 +192,7 @@ export function QuotesTable({ market, names }: { market: MarketView; names: Part
   const statusChip: Record<string, string> = { current: "chip-good", stale: "chip-warn", incomplete: "chip-muted", after_start: "chip-muted", mismatched_times: "chip-warn" };
   const statusText: Record<string, string> = { current: "Current", stale: "Stale", incomplete: "Incomplete set", after_start: "After start", mismatched_times: "Times differ" };
   return (
-    <div className="table-wrap">
+    <div className="table-wrap" tabIndex={0}>
       <table>
         <caption>
           {market.label}
@@ -416,7 +416,7 @@ function ModelCard({ a }: { a: Analysis }) {
           <p className="subtle small">
             {a.model.version}. Validation season ends {a.model.trainedThrough?.slice(0, 10)}. <Link to="/report">See the evaluation report.</Link>
           </p>
-          <div className="table-wrap">
+          <div className="table-wrap" tabIndex={0}>
             <table>
               <thead>
                 <tr>
@@ -746,7 +746,7 @@ function WhatIfCard({ a, names }: { a: Analysis; names: Partial<Record<Outcome, 
       </div>
       {result && (
         <div className="stack-sm" style={{ marginTop: 14 }} aria-live="polite">
-          <div className="table-wrap">
+          <div className="table-wrap" tabIndex={0}>
             <table>
               <thead>
                 <tr>

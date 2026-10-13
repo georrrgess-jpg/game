@@ -117,7 +117,7 @@ export function StepLineChart({
         </div>
       )}
       {showTable ? (
-        <div className="table-wrap" style={{ maxHeight: 300, overflow: "auto" }}>
+        <div className="table-wrap" tabIndex={0} style={{ maxHeight: 300, overflow: "auto" }}>
           <table>
             <thead>
               <tr>
@@ -269,7 +269,7 @@ export function CalibrationChart({ series, title }: { series: { key: string; lab
         </span>
       </div>
       {showTable ? (
-        <div className="table-wrap">
+        <div className="table-wrap" tabIndex={0}>
           <table>
             <thead>
               <tr>

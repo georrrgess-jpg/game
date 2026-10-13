@@ -45,6 +45,11 @@ export class ClassroomError extends Error {
 
 const RESCHEDULE_HOURS = 12;
 
+/** A forecast is a replay forecast when its game had already started by the real (dataset) clock. */
+export function isReplayForecast(eventStart: string, clock: string): boolean {
+  return Date.parse(eventStart) <= Date.parse(clock);
+}
+
 export function snapshotOf(a: GameAnalysis) {
   return {
     event: { id: a.event.id, home: a.event.home_name, away: a.event.away_name, start: a.event.start_time, league: a.event.league, sport: a.event.sport_key },
@@ -111,6 +116,8 @@ export class Classroom {
     analysis: GameAnalysis;
     probs: Partial<Record<OutcomeKey, number>>;
     createdAt: string;
+    /** The dataset's real clock (demo clock or wall clock), as opposed to the analysis information time. */
+    clock: string;
     notes?: string;
   }): ForecastRow {
     const a = input.analysis;
@@ -148,7 +155,9 @@ export class Classroom {
       quoted_price: a.market.bestPrice[pick]?.decimal ?? null,
       quoted_book: a.market.bestPrice[pick]?.book_title ?? null,
       quote_retrieved_at: a.market.bestPrice[pick]?.source_time ?? null,
-      input_snapshot: JSON.stringify({ ...snapshotOf(a), notes: cleanText(input.notes ?? "", 500) }),
+      // A replay forecast is made on a game that has already started by the real clock. It is kept and
+      // scored, but separately, because the outcome could have been looked up.
+      input_snapshot: JSON.stringify({ ...snapshotOf(a), notes: cleanText(input.notes ?? "", 500), replay: isReplayForecast(a.event.start_time, input.clock) }),
       abstain_reason: null,
       run_id: null,
     });
@@ -274,6 +283,7 @@ export class Classroom {
         quoted_book: f.quoted_book,
         result: st ? { settlement: st.settlement, reason: st.reason, realised: st.realised, score: st.event?.status === "final" ? `${st.event.home_score}-${st.event.away_score}` : null } : null,
         scores,
+        replay: !!snap.replay,
       };
     });
   }
@@ -293,11 +303,22 @@ export class Classroom {
     return this.db.all("SELECT * FROM experiments WHERE session_id = ? ORDER BY created_at DESC", [sessionId]);
   }
 
-  addEntry(experimentId: string, forecastId: string, outcome: OutcomeKey, stake: number, at: string): string {
+  /** Throws unless simulation points may be placed on this forecast (used before saving, too). */
+  checkEntryAllowed(experimentId: string, author: string, eventStart: string, clock: string): void {
+    const exp = this.db.get<{ id: string; author: string }>("SELECT id, author FROM experiments WHERE id = ?", [experimentId]);
+    if (!exp) throw new ClassroomError("Unknown experiment", 404);
+    if (exp.author !== cleanText(author, 40)) throw new ClassroomError("Points can only be added to your own experiment (the forecast author must match the experiment author).", 403);
+    if (isReplayForecast(eventStart, clock)) throw new ClassroomError("Points experiments only accept forecasts made before the game starts by the real clock (not replays of finished games).", 409);
+  }
+
+  addEntry(experimentId: string, forecastId: string, outcome: OutcomeKey, stake: number, at: string, clock: string): string {
     const exp = this.db.get<{ id: string; session_id: string; author: string }>("SELECT * FROM experiments WHERE id = ?", [experimentId]);
     if (!exp) throw new ClassroomError("Unknown experiment", 404);
     const f = this.forecast(forecastId);
     if (!f || f.session_id !== exp.session_id) throw new ClassroomError("The forecast must belong to the same session.", 400);
+    const ev = this.repo.event(f.event_id);
+    this.checkEntryAllowed(experimentId, f.author, ev?.start_time ?? f.event_start_snapshot, clock);
+    if (json<any>(f.input_snapshot, {}).replay) throw new ClassroomError("Replay forecasts cannot be used in points experiments.", 409);
     if (!Number.isFinite(stake) || stake <= 0 || stake > 10) throw new ClassroomError("Stake must be between 0 and 10 simulation points.");
     if (!CONTRACTS[f.contract].outcomes.includes(outcome)) throw new ClassroomError("Invalid outcome for this contract.");
     const snap = json<any>(f.input_snapshot, {});
@@ -349,14 +370,21 @@ export class Classroom {
   /** Per-author scoreboard (Brier / log loss) plus model and market on the same games. */
   scoreboard(sessionId: string, resultsAsOf: string) {
     const list = this.sessionForecasts(sessionId, resultsAsOf, true).filter((f) => f.kind === "student");
+    // Live and replay forecasts are scored separately: replay outcomes could have been looked up.
     const by = new Map<string, typeof list>();
-    for (const f of list) by.set(f.author, [...(by.get(f.author) ?? []), f]);
-    return [...by.entries()].map(([author, fs]) => {
+    for (const f of list) {
+      const k = `${f.replay ? "1" : "0"}|${f.author}`;
+      by.set(k, [...(by.get(k) ?? []), f]);
+    }
+    return [...by.entries()].map(([key, fs]) => {
+      const author = key.slice(2);
+      const replay = key.startsWith("1|");
       const scored = fs.filter((f) => f.scores);
       const modelScored = scored.filter((f) => f.scores!.modelBrier != null);
       const marketScored = scored.filter((f) => f.scores!.marketBrier != null);
       return {
         author,
+        replay,
         forecasts: fs.length,
         scored: scored.length,
         brier: scored.length ? mean(scored.map((f) => f.scores!.brier)) : null,

@@ -50,7 +50,9 @@ test("Analyze Today: board, three views and visible status", async ({ page }) =>
 test("Selected game: estimates, quotes, evidence and a hypothetical scenario", async ({ page }) => {
   await page.goto("/games");
   await page.getByLabel("Team or game").fill("Owls");
-  const link = page.getByRole("link", { name: /Owls/ }).first();
+  // Today's Owls game: the scripted conflicting reports were published that morning.
+  const today = page.locator("section").filter({ has: page.getByText("today", { exact: true }) });
+  const link = today.getByRole("link", { name: /Owls/ }).first();
   await expect(link).toBeVisible();
   await link.click();
   await expect(page.getByRole("heading", { name: "Estimates" })).toBeVisible();

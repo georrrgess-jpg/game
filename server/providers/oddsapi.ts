@@ -86,9 +86,21 @@ export function oddsApiCost(markets: number, regions: number, bookmakers: number
 }
 
 /** Leagues where the final soccer score is the regulation score (no extra time). Cups are excluded. */
+/**
+ * Leagues where every game ends after regulation time (no extra time or penalties at any stage),
+ * so the final score IS the regulation score. Conservative allow-list: anything else (cups, leagues
+ * with play-offs such as MLS or second divisions) is left unsettleable for 3-way markets.
+ */
+export const REGULATION_ONLY_SOCCER_LEAGUES = new Set([
+  "soccer_epl",
+  "soccer_spain_la_liga",
+  "soccer_germany_bundesliga",
+  "soccer_italy_serie_a",
+  "soccer_france_ligue_one",
+  "soccer_portugal_primeira_liga",
+]);
 export function soccerLeagueFinalIsRegulation(sportKey: string): boolean {
-  if (sportFamily(sportKey) !== "soccer") return false;
-  return !/(cup|copa|champs|champions|europa|conference|libertadores|sudamericana|world_cup|euro|nations|qualif|playoff|trophy)/.test(sportKey);
+  return sportFamily(sportKey) === "soccer" && REGULATION_ONLY_SOCCER_LEAGUES.has(sportKey);
 }
 
 export class OddsApiProvider {
@@ -178,8 +190,9 @@ export class OddsApiProvider {
     }
   }
 
-  async listSports(): Promise<z.infer<typeof sportSchema>[]> {
-    const data = await this.call("/sports", {}, 0, 6 * 3600);
+  /** `fresh` skips the cache (connection tests must re-check the key and remaining quota). */
+  async listSports(fresh = false): Promise<z.infer<typeof sportSchema>[]> {
+    const data = await this.call("/sports", {}, 0, fresh ? 0 : 6 * 3600);
     const parsed = z.array(sportSchema).safeParse(data);
     if (!parsed.success) throw new ProviderError("Unexpected /sports response shape.", "bad_response");
     setObserved(this.deps.db, ID, { sports: parsed.data.filter((s) => s.active).map((s) => ({ key: s.key, title: s.title, group: s.group })), sportsCheckedAt: iso(this.deps.now()) });
@@ -215,7 +228,7 @@ export class OddsApiProvider {
         continue;
       }
       const e = ev.data;
-      const eventId = this.matchOrCreateEvent(sportKey, e, retrievedAt);
+      const eventId = this.matchOrCreateEvent(sportKey, e, retrievedAt, knownAt);
       if (!eventId) {
         unmatched++;
         continue;
@@ -285,25 +298,31 @@ export class OddsApiProvider {
    * (MLB), quotes attach only to existing schedule events (matched by teams and start time).
    * For other sports a canonical event is created from the odds feed itself.
    */
-  matchOrCreateEvent(sportKey: string, e: z.infer<typeof oddsEventSchema>, retrievedAt: string): string | null {
+  matchOrCreateEvent(sportKey: string, e: z.infer<typeof oddsEventSchema>, retrievedAt: string, knownAt: string | null = null): string | null {
     const repo = this.deps.repo;
     const commence = safeIso(e.commence_time);
     if (!commence || !e.home_team || !e.away_team) return null;
     const linked = repo.linkedEvent(ID, e.id);
     if (linked && repo.event(linked)) {
-      if (linked.startsWith("oddsapi:")) this.upsertOddsEvent(sportKey, e, commence, retrievedAt, linked);
+      if (linked.startsWith("oddsapi:")) this.upsertOddsEvent(sportKey, e, commence, retrievedAt, linked, knownAt);
       return linked;
     }
     if (sportKey === "baseball_mlb") {
       const h = repo.resolveParticipant("live", sportKey, e.home_team);
       const a = repo.resolveParticipant("live", sportKey, e.away_team);
       if (!h || !a) return null;
-      const lo = new Date(Date.parse(commence) - 6 * 3600000).toISOString();
-      const hi = new Date(Date.parse(commence) + 6 * 3600000).toISOString();
-      const cands = repo.db.all<EventRecord>(
+      // Scheduled starts agree within minutes; a tight window keeps the two halves of a doubleheader apart.
+      const lo = new Date(Date.parse(commence) - 150 * 60000).toISOString().replace(/\.\d{3}Z$/, "Z");
+      const hi = new Date(Date.parse(commence) + 150 * 60000).toISOString().replace(/\.\d{3}Z$/, "Z");
+      let cands = repo.db.all<EventRecord>(
         "SELECT * FROM events WHERE dataset = 'live' AND sport_key = ? AND home_id = ? AND away_id = ? AND start_time >= ? AND start_time <= ? AND status NOT IN ('postponed','cancelled')",
         [sportKey, h, a, lo, hi],
       );
+      // Never attach to an event that is already linked to a different odds event (e.g. the other half of a doubleheader).
+      const taken = new Set(
+        repo.db.all<{ event_id: string }>("SELECT event_id FROM event_links WHERE provider = ? AND provider_event_id != ?", [ID, e.id]).map((r) => r.event_id),
+      );
+      cands = cands.filter((c) => !taken.has(c.id));
       if (!cands.length) return null;
       // Doubleheaders: choose the closest start time; refuse if two candidates are equally close.
       cands.sort((x, y) => Math.abs(Date.parse(x.start_time) - Date.parse(commence)) - Math.abs(Date.parse(y.start_time) - Date.parse(commence)));
@@ -312,7 +331,7 @@ export class OddsApiProvider {
       return cands[0].id;
     }
     const id = `oddsapi:${e.id}`;
-    this.upsertOddsEvent(sportKey, e, commence, retrievedAt, id);
+    this.upsertOddsEvent(sportKey, e, commence, retrievedAt, id, knownAt);
     repo.linkEvent(ID, e.id, id, "provider-id", retrievedAt);
     return id;
   }
@@ -326,7 +345,8 @@ export class OddsApiProvider {
     return id;
   }
 
-  private upsertOddsEvent(sportKey: string, e: z.infer<typeof oddsEventSchema>, commence: string, retrievedAt: string, id: string): void {
+  private upsertOddsEvent(sportKey: string, e: z.infer<typeof oddsEventSchema>, commence: string, retrievedAt: string, id: string, knownAt: string | null = null): void {
+    const infoTime = knownAt ?? retrievedAt;
     const existing = this.deps.repo.event(id);
     this.deps.repo.upsertEvent({
       id,
@@ -338,7 +358,7 @@ export class OddsApiProvider {
       away_id: this.teamId(sportKey, e.away_team!),
       start_time: commence,
       status: existing?.status ?? "scheduled",
-      status_at: existing?.status_at ?? retrievedAt,
+      status_at: existing?.status_at ?? infoTime,
       final_at: existing?.final_at ?? null,
       home_score: existing?.home_score ?? null,
       away_score: existing?.away_score ?? null,
@@ -356,7 +376,7 @@ export class OddsApiProvider {
       source: ID,
       source_updated_at: retrievedAt,
       retrieved_at: retrievedAt,
-      known_at: existing?.known_at ?? retrievedAt,
+      known_at: existing && existing.known_at < infoTime ? existing.known_at : infoTime,
       extra: { providerEventId: e.id },
     });
   }

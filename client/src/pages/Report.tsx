@@ -106,7 +106,7 @@ export default function ReportPage() {
           {r.splits && (
             <div className="card">
               <h2>Training, validation and holdout</h2>
-              <div className="table-wrap">
+              <div className="table-wrap" tabIndex={0}>
                 <table>
                   <thead>
                     <tr>
@@ -148,7 +148,7 @@ export default function ReportPage() {
             <div className="card">
               <h2>Holdout results (lower is better)</h2>
               {r.holdout.warning && <Callout kind="warn">{r.holdout.warning}</Callout>}
-              <div className="table-wrap" style={{ marginTop: 10 }}>
+              <div className="table-wrap" tabIndex={0} style={{ marginTop: 10 }}>
                 <table>
                   <thead>
                     <tr>
@@ -225,7 +225,7 @@ export default function ReportPage() {
           {r.validationMetrics && (
             <div className="card">
               <h2>Validation season</h2>
-              <div className="table-wrap">
+              <div className="table-wrap" tabIndex={0}>
                 <table>
                   <thead>
                     <tr>
@@ -256,7 +256,7 @@ export default function ReportPage() {
                 </table>
               </div>
               <p className="small" style={{ marginTop: 8 }}>
-                Model minus market, log loss: <CIText ci={r.validationMetrics.modelMinusMarketLogLoss} better="Model" />. The board's discrepancy verdicts use this comparison: if the model did not beat the market here, every model–market gap is labelled "no credible difference".
+                Model minus market, log loss: <CIText ci={r.validationMetrics.modelMinusMarketLogLoss} better="Model" />. This season was used to choose the model's settings, so it flatters the model. The board's verdicts therefore use the out-of-sample holdout comparison once at least 200 holdout games have a market reference, and never call a gap a research lead on validation evidence alone.
               </p>
             </div>
           )}
@@ -266,7 +266,7 @@ export default function ReportPage() {
               <h2>Market-reference evaluation ({r.marketOnly.outcomes.join(" / ")})</h2>
               {r.modelReason && <Callout kind="info">{r.modelReason}</Callout>}
               {r.marketOnly.warning && <Callout kind="warn">{r.marketOnly.warning}</Callout>}
-              <div className="table-wrap" style={{ marginTop: 10 }}>
+              <div className="table-wrap" tabIndex={0} style={{ marginTop: 10 }}>
                 <table>
                   <thead>
                     <tr>

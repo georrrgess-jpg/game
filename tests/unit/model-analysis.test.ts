@@ -225,6 +225,19 @@ describe("demo world analysis (leakage, replay, determinism)", () => {
     expect(muchLater.evidence.news.map((n) => n.id)).toEqual(atStart.evidence.news.map((n) => n.id));
   });
 
+  it("verdicts use the out-of-sample record when there are enough holdout games", () => {
+    const fit = models.fit("demo", "demo_baseball", "2026", "2026-06-16T15:00:00Z");
+    if (!fit.available) throw new Error("expected a fit");
+    const rec = models.trackRecord("demo", "demo_baseball", fit, "2026-06-16T15:00:00Z");
+    expect(rec.source).toBe("holdout");
+    expect(rec.n).toBeGreaterThanOrEqual(200);
+    const early = models.trackRecord("demo", "demo_baseball", fit, "2026-04-20T15:00:00Z");
+    expect(early.source).toBe("validation");
+    const b = buildBoard({ repo, models }, ctx("2026-04-20T15:00:00Z"), "2026-04-20");
+    // With validation-only evidence the best possible verdict is "insufficient evidence", never a research lead.
+    expect(b.items.every((i) => i.verdict.verdict !== "research_lead")).toBe(true);
+  });
+
   it("model parameters never use games from the forecast season or later", () => {
     const fitA = models.fit("demo", "demo_baseball", "2026", "2026-05-01T00:00:00Z");
     const fitB = models.fit("demo", "demo_baseball", "2026", "2026-09-30T00:00:00Z");

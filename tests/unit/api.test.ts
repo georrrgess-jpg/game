@@ -94,6 +94,22 @@ describe("security", () => {
     }
   }, 60000);
 
+  it("percent-encoded paths cannot bypass the CSRF check", async () => {
+    for (const url of ["/%61pi/scheduler/pause", "/%61pi/classroom/results-hidden", "/api/%73cheduler/run/daily_scan"]) {
+      const r = await ctx.app.inject({ method: "POST", url, headers: { host: HOST, origin: "http://evil.example" } });
+      expect(r.statusCode, url).toBe(403);
+    }
+    expect((await req("GET", "/api/scheduler")).json.paused).toBe(true);
+  });
+
+  it("rejects out-of-range and oddly formatted information times", async () => {
+    expect((await req("GET", "/api/board?dataset=demo&asOf=%2B010000-01-01T00:00:00Z")).status).toBe(400);
+    expect((await req("GET", "/api/board?dataset=demo&asOf=1999-01-01T00:00:00Z")).status).toBe(400);
+    const msOk = await req("GET", "/api/board?dataset=demo&asOf=2026-06-16T14:59:59.500Z");
+    expect(msOk.status).toBe(200);
+    expect(msOk.json.asOf).toBe("2026-06-16T14:59:59Z");
+  });
+
   it("CSV exports neutralise spreadsheet formulas", () => {
     expect(csvCell("=HYPERLINK(\"x\")")).toBe("\"'=HYPERLINK(\"\"x\"\")\"");
     expect(csvCell("+cmd")).toBe("'+cmd");
@@ -184,7 +200,44 @@ describe("classroom experiments", () => {
     expect(late.status).toBe(409);
   });
 
+  it("points can only go on your own forecasts, before the start by the real clock", async () => {
+    const b = await req("GET", "/api/board?dataset=demo");
+    const open = b.json.items.find((i: any) => !i.voided && !i.started && i.eventId !== gameId).eventId;
+    const mine = await req("POST", "/api/experiments", { dataset: "demo", sessionId, name: "Mine", author: "Cara" });
+    const theirs = await req("POST", "/api/experiments", { dataset: "demo", sessionId, name: "Theirs", author: "Dev" });
+    // Someone else's experiment: refused, and nothing is saved.
+    const before = ctx.db.get<{ c: number }>("SELECT COUNT(*) c FROM forecasts")!.c;
+    const wrong = await req("POST", "/api/forecasts", { dataset: "demo", sessionId, eventId: open, author: "Cara", probs: { home: 0.5, away: 0.5 }, stake: { experimentId: theirs.json.id, outcome: "home", points: 2 } });
+    expect(wrong.status).toBe(403);
+    expect(ctx.db.get<{ c: number }>("SELECT COUNT(*) c FROM forecasts")!.c).toBe(before);
+    // Own forecast, then the game starts: a later entry is refused.
+    const f = await req("POST", "/api/forecasts", { dataset: "demo", sessionId, eventId: open, author: "Cara", probs: { home: 0.5, away: 0.5 } });
+    expect(f.status).toBe(200);
+    await req("POST", "/api/demo/clock", { action: "advance_day" });
+    const late = await req("POST", `/api/experiments/${mine.json.id}/entries`, { forecastId: f.json.forecast.id, outcome: "home", stake: 2 });
+    expect(late.status).toBe(409);
+    await req("POST", "/api/demo/clock", { action: "reset" });
+  });
+
+  it("replay forecasts on already-played games are flagged, scored separately and never earn points", async () => {
+    // Clock is back at the demo start; replay a game from two days earlier whose result is known.
+    const past = await req("GET", "/api/board?dataset=demo&date=2026-06-13&asOf=2026-06-13T15:00:00Z");
+    const g = past.json.items.find((i: any) => !i.voided && !i.started);
+    const exp = await req("POST", "/api/experiments", { dataset: "demo", sessionId, name: "Replay", author: "Eve" });
+    const withStake = await req("POST", "/api/forecasts", { dataset: "demo", sessionId, eventId: g.eventId, asOf: "2026-06-13T15:00:00Z", author: "Eve", probs: { home: 0.6, away: 0.4 }, stake: { experimentId: exp.json.id, outcome: "home", points: 5 } });
+    expect(withStake.status).toBe(409);
+    const ok = await req("POST", "/api/forecasts", { dataset: "demo", sessionId, eventId: g.eventId, asOf: "2026-06-13T15:00:00Z", author: "Eve", probs: { home: 0.6, away: 0.4 } });
+    expect(ok.status).toBe(200);
+    const list = await req("GET", `/api/sessions/${sessionId}/forecasts?reveal=1`);
+    const eve = list.json.forecasts.find((x: any) => x.author === "Eve");
+    expect(eve.replay).toBe(true);
+    const rows = list.json.scoreboard.filter((r: any) => r.author === "Eve");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].replay).toBe(true);
+  });
+
   it("the instructor can hide results everywhere", async () => {
+    await req("POST", "/api/demo/clock", { action: "advance_day" }); // make the forecast game final
     await req("POST", "/api/classroom/results-hidden", { hidden: true });
     const hidden = await req("GET", `/api/sessions/${sessionId}/forecasts?reveal=1`);
     expect(hidden.json.revealed).toBe(false);
@@ -194,8 +247,13 @@ describe("classroom experiments", () => {
     expect(a.json.resultHidden).toBe(true);
     const ev = await req("GET", "/api/events?dataset=demo&q=");
     expect(ev.json.events.every((e: any) => e.score === null)).toBe(true);
+    // Soccer stores regulation-time scores too: they must be masked as well.
+    const soccer = ctx.db.get<{ id: string }>("SELECT id FROM events WHERE sport_key = 'demo_soccer' AND status = 'final' AND start_time < '2026-06-16' ORDER BY start_time DESC LIMIT 1")!;
+    const sa = await req("GET", `/api/events/${encodeURIComponent(soccer.id)}/analysis?dataset=demo`);
+    expect([sa.json.event.home_score, sa.json.event.away_score, sa.json.event.regulation_home, sa.json.event.regulation_away, sa.json.event.final_at]).toEqual([null, null, null, null, null]);
     await req("POST", "/api/classroom/results-hidden", { hidden: false });
     expect((await req("GET", `/api/sessions/${sessionId}/forecasts?reveal=1`)).json.revealed).toBe(true);
+    await req("POST", "/api/demo/clock", { action: "reset" });
   });
 
   it("restarting a session archives it without deleting forecasts", async () => {

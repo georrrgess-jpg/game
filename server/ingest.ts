@@ -1,7 +1,7 @@
 // Orchestrates live provider refreshes. Each step is isolated so a partial outage
 // (one provider down, quota exhausted, a malformed response) never blocks the others.
 
-import { localDayBounds, addDaysToDate } from "../shared/time";
+import { localDayBounds, addDaysToDate, toUtcIso } from "../shared/time";
 import type { ProviderDeps } from "./providers/common";
 import { ProviderError } from "./providers/common";
 import { OddsApiProvider } from "./providers/oddsapi";
@@ -23,6 +23,7 @@ export class LiveIngest {
   readonly weather: OpenMeteoProvider;
   readonly rss: RssProvider;
   private running: Promise<StepResult[]> | null = null;
+  private runningDate: string | null = null;
 
   constructor(private deps: ProviderDeps) {
     this.odds = new OddsApiProvider(deps);
@@ -44,10 +45,14 @@ export class LiveIngest {
   }
 
   /** Full refresh for a local day: schedules, odds, results, injuries, weather, news. Concurrent calls share one run. */
-  refreshDay(localDate: string, parts: { odds?: boolean; news?: boolean } = {}): Promise<StepResult[]> {
-    if (this.running) return this.running;
+  async refreshDay(localDate: string, parts: { odds?: boolean; news?: boolean } = {}): Promise<StepResult[]> {
+    // A refresh for the same day already in progress is shared; a different day waits for it, then runs.
+    if (this.running && this.runningDate === localDate) return this.running;
+    if (this.running) await this.running.catch(() => undefined);
+    this.runningDate = localDate;
     this.running = this.doRefreshDay(localDate, parts).finally(() => {
       this.running = null;
+      this.runningDate = null;
     });
     return this.running;
   }
@@ -98,7 +103,7 @@ export class LiveIngest {
     }
 
     const { startUtc, endUtc } = localDayBounds(localDate, zone);
-    const now = this.deps.now().toISOString();
+    const now = toUtcIso(this.deps.now());
     const todays = this.deps.repo.eventsInWindow("live", startUtc, endUtc, now);
 
     if (s.providers.mlb.enabled) {

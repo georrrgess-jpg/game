@@ -175,6 +175,8 @@ export class HttpClient {
         "INSERT INTO http_cache(key, status, headers, body, fetched_at, expires_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET status=excluded.status, headers=excluded.headers, body=excluded.body, fetched_at=excluded.fetched_at, expires_at=excluded.expires_at",
         [key, res.status, JSON.stringify(res.headers), res.body, fetched.toISOString(), new Date(fetched.getTime() + opts.cacheTtlSec * 1000).toISOString()],
       );
+      // Expired entries are never served, so drop them to keep the database small.
+      this.db.run("DELETE FROM http_cache WHERE expires_at < ?", [fetched.toISOString()]);
     }
     return res;
   }

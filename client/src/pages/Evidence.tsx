@@ -144,7 +144,7 @@ export default function EvidencePage() {
               {!data.injuries.length ? (
                 <Empty title="No active injury reports for teams playing this day" />
               ) : (
-                <div className="table-wrap">
+                <div className="table-wrap" tabIndex={0}>
                   <table>
                     <thead>
                       <tr>
@@ -181,7 +181,7 @@ export default function EvidencePage() {
             </div>
           )}
           {tab === "lineups" && (
-            <div className="table-wrap">
+            <div className="table-wrap" tabIndex={0}>
               <table>
                 <thead>
                   <tr>

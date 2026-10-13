@@ -47,7 +47,7 @@ export default function MarketsPage() {
                   >
                     <span>
                       {i.awayAbbr ?? i.away} at {i.homeAbbr ?? i.home}
-                      <span className="subtle small" style={{ display: "block", color: "inherit", opacity: 0.8 }}>
+                      <span className="small" style={{ display: "block", color: "inherit" }}>
                         {fmtTime(i.start, zone)} · {i.booksCurrent}/{i.booksTotal} current
                       </span>
                     </span>
@@ -114,7 +114,7 @@ function MarginCalculator() {
           </button>
         </div>
         {ok && (
-          <div className="table-wrap">
+          <div className="table-wrap" tabIndex={0}>
             <table>
               <thead>
                 <tr>

@@ -144,9 +144,13 @@ changes a number.
   US-sport `h2h` is treated as full game including overtime, and `h2h_3_way` as regulation-only.
   Bookmaker rules can differ, so check them if precision matters.
 - **Settlement:** postponed, cancelled or rescheduled (start moved more than 12 h) means void. An
-  official tie in a 2-way market is void. 3-way markets settle only on a known regulation-time score
-  (league soccer); cup games without a regulation score are "unsupported", not guessed. Suspended
-  games wait for the official completion.
+  official tie in a 2-way market is void. 3-way markets settle only on a known regulation-time score.
+  For the Odds API that means an allow-list of leagues with no extra time at any stage (EPL, La Liga,
+  Bundesliga, Serie A, Ligue 1, Primeira Liga). Cups and leagues with play-offs (e.g. MLS) are
+  "unsupported", not guessed. Suspended games wait for the official completion.
+- **Classroom integrity:** forecasts are accepted only before the start by the information time.
+  Replay forecasts on games already played by the real clock are kept but scored on separate rows,
+  and they can never earn simulation points.
 - **Injuries:** MLB injured-list status only (no day-to-day list). Injuries and lineups are evidence;
   no numeric effect is applied without a validated method, so nothing is double-counted.
 - **Live scores** are not modelled. Analysis is pre-game and frozen at the scheduled start once a
@@ -183,10 +187,13 @@ covariance (delta method). It reflects parameter uncertainty only and understate
 **Combined estimate:** a logistic blend of model and market fitted on the validation season. It is
 labelled as using market odds.
 
-**Model–market verdicts:** a gap is a *research lead* only if (1) the model beat the market on the
-validation season (95% paired-bootstrap interval of the log-loss difference below 0), (2) the market
-falls outside the model's 80% range, and (3) the gap is at least 3 points. Otherwise the verdict is
-*no credible difference* or *insufficient evidence*. The board never fills a quota.
+**Model–market verdicts:** a gap is a *research lead* only if (1) the model beat the market **out of
+sample** (95% paired-bootstrap interval of the log-loss difference below 0 on at least 200 of this
+season's earlier games, with parameters fixed before the season), (2) the market falls outside the
+model's 80% range, and (3) the gap is at least 3 points. With fewer holdout games, the validation
+season is used, but because the model's settings were chosen on it, the best possible verdict is then
+*insufficient evidence*. Otherwise the verdict is *no credible difference*. The board never fills a
+quota.
 
 ### Evaluation results (fictional demo league; methods are real, data is simulated)
 
@@ -203,7 +210,7 @@ Lower is better.
 
 - Model minus market log loss: +0.020 (95% interval +0.005 to +0.034), so **the model is worse than
   the market**. On validation the gap (+0.006, −0.005 to +0.017) was not significant. Every
-  model–market gap is therefore labelled *no credible difference*.
+  model–market gap on the demo board is therefore labelled *no credible difference*.
 - Model minus home-rate baseline: −0.013 (−0.029 to +0.003), so no clear advantage over the
   baseline yet. Over the full simulated 2026 season (n = 921) it is −0.017 (−0.030 to −0.003).
 - Hypothetical points (1 point wherever model EV > 0): −18.5 over 350 stakes, a negative result
@@ -253,7 +260,7 @@ Claude Code session is not a background worker for this app.
 
 ## 9. What was tested, and what needs live credentials
 
-`npm test`: **91 tests** across 6 files, all passing in the build environment. Covers:
+`npm test`: **97 tests** across 6 files, all passing in the build environment. Covers:
 - odds math (positive and negative American odds, ±100, round-trips, malformed and zero quotes,
   3-way margin, EV with and without pushes, half-up rounding),
 - settlement (overtime vs regulation, draws, pushes on lines, void, suspended), equivalent-contract
@@ -269,13 +276,19 @@ Claude Code session is not a background worker for this app.
 - API workflows: Host and CSRF checks, PIN, input validation, Analyze Today snapshots, selected game,
   what-if, immutable forecasts, reveal after the clock advances, instructor hide-results, session
   restart, **restart persistence**, connected mode with no demo substitution, scheduler pause and
-  resume and DST next-run times, AI-output validation.
+  resume and DST next-run times, AI-output validation,
+- regression tests for every finding of an independent code review: percent-encoded CSRF paths,
+  points entries after the start or in someone else's experiment, replay forecasts on finished
+  games, regulation scores leaking while results are hidden, historical snapshots that never went
+  stale, out-of-range information times, play-off soccer leagues, the doubleheader matching window,
+  postponed originals kept for replay, and venue data surviving history imports.
 
-`npm run test:e2e`: **12 Playwright tests** (6 workflows × desktop 1366×900 and Pixel 7), all
-passing: Analyze Today with keyboard tab navigation, game workspace with what-if, the full
-forecast → advance day → reveal → score loop, replay and connected labels, every page without
-horizontal overflow, skip-link focus, theme and reduced-motion preferences, and **a clean browser
-console** asserted in every test.
+`npm run test:e2e`: **16 Playwright tests** (desktop 1366×900 and Pixel 7), all passing: Analyze
+Today with keyboard tab navigation, game workspace with what-if, the full forecast → advance day →
+reveal → score loop, replay and connected labels, every page without horizontal overflow,
+skip-link focus, theme and reduced-motion preferences, **a clean browser console** asserted in every
+test, and an **axe-core accessibility audit of every page in the dark and light themes with zero
+violations** (contrast, heading order, keyboard-reachable scroll regions, labels).
 
 | Integration | Implemented | Fixture-tested | Live-verified |
 |---|---|---|---|
@@ -285,8 +298,9 @@ console** asserted in every test.
 | RSS/Atom feeds | ✅ | ✅ | ❌ network blocked; confirm default feed URL |
 | Anthropic API explanations | ✅ | output validation tested | ❌ needs `ANTHROPIC_API_KEY` |
 
-Not verified: real browsers other than Chromium, screen-reader walkthroughs (semantics are in place:
-landmarks, labelled controls, tab roles, table headers, live regions, focus management), and
+Not verified: real browsers other than Chromium, manual screen-reader walkthroughs (automated axe
+checks pass; landmarks, labelled controls, tab roles, table headers, live regions and focus
+management are in place), and
 Windows/macOS launch (the code is cross-platform; tested on Linux with Node 22).
 
 ---

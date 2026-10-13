@@ -183,9 +183,9 @@ function PredictCard({ item, sessionId, author, blind, experimentId, focused }: 
   return (
     <article id={`predict-${item.eventId}`} className="card" style={focused ? { borderColor: "var(--accent)" } : undefined} aria-labelledby={`p-${item.eventId}`}>
       <div className="row-between">
-        <h3 id={`p-${item.eventId}`} style={{ margin: 0 }}>
+        <h2 id={`p-${item.eventId}`} style={{ margin: 0, fontSize: "1rem" }}>
           {item.away} at {item.home}
-        </h3>
+        </h2>
         <span className="subtle small">
           {fmtTime(item.start, zone, { weekday: "short", hour: "numeric", minute: "2-digit" })} · {item.contractShort}
         </span>
@@ -272,8 +272,9 @@ interface ForecastsResp {
     market_probs: Partial<Record<Outcome, number>> | null;
     result: { settlement: string; reason: string; realised: string | null; score: string | null } | null;
     scores: { brier: number; logLoss: number; modelBrier: number | null; marketBrier: number | null } | null;
+    replay: boolean;
   }[];
-  scoreboard: { author: string; forecasts: number; scored: number; brier: number | null; logLoss: number | null; modelBrierSameGames: number | null; marketBrierSameGames: number | null; modelGames: number; marketGames: number }[] | null;
+  scoreboard: { author: string; replay: boolean; forecasts: number; scored: number; brier: number | null; logLoss: number | null; modelBrierSameGames: number | null; marketBrierSameGames: number | null; modelGames: number; marketGames: number }[] | null;
 }
 
 function ResultsPanel({ sessionId, hidden }: { sessionId: string; hidden: boolean }) {
@@ -305,7 +306,10 @@ function ResultsPanel({ sessionId, hidden }: { sessionId: string; hidden: boolea
       {data?.scoreboard && data.scoreboard.length > 0 && (
         <div className="card">
           <h2>Scoreboard (Brier score, lower is better)</h2>
-          <div className="table-wrap">
+          <p className="subtle small">
+            Replay forecasts (made on games that had already been played) are scored on separate rows: their outcomes could have been looked up, so they are for practice, not competition. They cannot be used in points experiments.
+          </p>
+          <div className="table-wrap" tabIndex={0}>
             <table>
               <thead>
                 <tr>
@@ -320,8 +324,10 @@ function ResultsPanel({ sessionId, hidden }: { sessionId: string; hidden: boolea
               </thead>
               <tbody>
                 {data.scoreboard.map((s) => (
-                  <tr key={s.author}>
-                    <td>{s.author}</td>
+                  <tr key={`${s.replay}-${s.author}`}>
+                    <td>
+                      {s.author} {s.replay && <span className="chip chip-warn">replay</span>}
+                    </td>
                     <td className="r num">{s.forecasts}</td>
                     <td className="r num">{s.scored}</td>
                     <td className="r num">{s.brier?.toFixed(3) ?? "—"}</td>
@@ -341,7 +347,7 @@ function ResultsPanel({ sessionId, hidden }: { sessionId: string; hidden: boolea
       )}
       {data && !data.forecasts.length && <Empty title="No forecasts in this session yet">Make some on the "Make forecasts" tab.</Empty>}
       {data && data.forecasts.length > 0 && (
-        <div className="table-wrap">
+        <div className="table-wrap" tabIndex={0}>
           <table>
             <thead>
               <tr>
@@ -356,7 +362,9 @@ function ResultsPanel({ sessionId, hidden }: { sessionId: string; hidden: boolea
             <tbody>
               {data.forecasts.map((f) => (
                 <tr key={f.id}>
-                  <td>{f.author}</td>
+                  <td>
+                    {f.author} {f.replay && <span className="chip chip-warn">replay</span>}
+                  </td>
                   <td>
                     {f.game}
                     <div className="subtle small">{fmtDateTime(f.start, zone)}</div>
@@ -417,7 +425,7 @@ function NotebookPanel({ sessionId, hidden }: { sessionId: string; hidden: boole
   return (
     <div className="stack">
       <Callout kind="warn" title="Simulation points only.">
-        Each experiment starts with 100 points. Points go on an outcome at the highest quoted price saved with the forecast. Point totals are a noisy teaching tool: a few results say almost nothing about forecast skill. Use the Brier score and calibration to judge forecasts.
+        Each experiment starts with 100 points. Points go on an outcome at the highest quoted price saved with the forecast, only for your own forecasts made before the game starts (never for replays of finished games). Point totals are a noisy teaching tool: a few results say almost nothing about forecast skill. Use the Brier score and calibration to judge forecasts.
       </Callout>
       <div className="card row" style={{ alignItems: "flex-end" }}>
         <label className="field">
@@ -464,7 +472,7 @@ function NotebookPanel({ sessionId, hidden }: { sessionId: string; hidden: boole
           </div>
           <p className="subtle small">{report.summary.note}</p>
           {report.entries.length ? (
-            <div className="table-wrap">
+            <div className="table-wrap" tabIndex={0}>
               <table>
                 <thead>
                   <tr>

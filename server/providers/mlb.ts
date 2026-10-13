@@ -261,16 +261,58 @@ export class MlbProvider {
         venue_lat: coords?.latitude ?? null,
         venue_lon: coords?.longitude ?? null,
         venue_tz: g.venue?.timeZone?.id ?? null,
-        indoor: roof && /dome/i.test(roof) ? 1 : 0,
+        indoor: roof ? (/dome/i.test(roof) ? 1 : 0) : existing?.indoor ?? 0,
         rescheduled_from: originalDate && !g.resumedFrom ? originalDate : null,
         game_number: g.gameNumber ?? 1,
         source: ID,
         source_updated_at: now,
         retrieved_at: now,
         known_at: existing?.known_at ?? knownAt,
-        extra: { gamePk: pk, detailedState: g.status.detailedState, roofType: roof, resumed: !!g.resumedFrom, finalAtEstimated: status === "final" && !existing?.final_at },
+        extra: {
+          gamePk: pk,
+          detailedState: g.status.detailedState,
+          roofType: roof ?? (existing ? JSON.parse(existing.extra || "{}").roofType ?? null : null),
+          resumed: !!g.resumedFrom,
+          finalAtEstimated: status === "final" && !existing?.final_at,
+        },
       });
       events++;
+      // Keep the postponement visible on its original date for replays (the make-up keeps the official id).
+      const original = entries.find((x) => x !== g && mapMlbStatus(x.status) === "postponed");
+      if (original && original.gameDate !== g.gameDate) {
+        const oStart = DateTime.fromISO(original.gameDate, { zone: "utc" }).toISO({ suppressMilliseconds: true })!;
+        this.deps.repo.upsertEvent({
+          id: `${id}@${original.officialDate ?? oStart.slice(0, 10)}`,
+          dataset: "live",
+          sport_key: SPORT,
+          league: "MLB",
+          season: original.season ?? oStart.slice(0, 4),
+          home_id: homeId,
+          away_id: awayId,
+          start_time: oStart,
+          status: "postponed",
+          status_at: new Date(Math.min(Date.parse(now), Date.parse(oStart))).toISOString().replace(/\.\d{3}Z$/, "Z"),
+          final_at: null,
+          home_score: null,
+          away_score: null,
+          regulation_home: null,
+          regulation_away: null,
+          final_is_regulation: 0,
+          neutral_site: 0,
+          venue_name: original.venue?.name ?? null,
+          venue_lat: null,
+          venue_lon: null,
+          venue_tz: null,
+          indoor: 0,
+          rescheduled_from: null,
+          game_number: original.gameNumber ?? 1,
+          source: ID,
+          source_updated_at: now,
+          retrieved_at: now,
+          known_at: new Date(Math.min(Date.parse(now), Date.parse(oStart) - 7 * 86400000)).toISOString().replace(/\.\d{3}Z$/, "Z"),
+          extra: { gamePk: pk, postponedOriginal: true, madeUpAs: id },
+        });
+      }
       for (const side of ["home", "away"] as const) {
         const teamId = side === "home" ? homeId : awayId;
         const players = side === "home" ? g.lineups?.homePlayers : g.lineups?.awayPlayers;
