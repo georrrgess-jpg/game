@@ -1,0 +1,5 @@
+{ "copyright": "Copyright 2026 MLB Advanced Media, L.P.", "roster": [
+  { "person": { "id": 501, "fullName": "Healthy Player" }, "position": { "abbreviation": "1B" }, "status": { "code": "A", "description": "Active" } },
+  { "person": { "id": 502, "fullName": "Hurt Pitcher" }, "position": { "abbreviation": "P" }, "status": { "code": "D15", "description": "Injured 15-Day" } },
+  { "person": { "id": 503, "fullName": "Long Term Outfielder" }, "position": { "abbreviation": "RF" }, "status": { "code": "D60", "description": "Injured 60-Day" } }
+] }

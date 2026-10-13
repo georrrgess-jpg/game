@@ -1,0 +1,3 @@
+{ "latitude": 40.83, "longitude": -73.93, "generationtime_ms": 0.1, "utc_offset_seconds": 0, "timezone": "GMT", "timezone_abbreviation": "GMT", "elevation": 20,
+  "hourly_units": { "time": "iso8601", "temperature_2m": "°C", "precipitation_probability": "%", "wind_speed_10m": "km/h" },
+  "hourly": { "time": ["2026-06-16T22:00", "2026-06-16T23:00", "2026-06-17T00:00"], "temperature_2m": [24.1, 23.4, 22.0], "precipitation_probability": [10, 35, 40], "wind_speed_10m": [12.5, 14.0, 9.8] } }

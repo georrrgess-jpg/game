@@ -1,0 +1,35 @@
+{ "copyright": "Copyright 2026 MLB Advanced Media, L.P.", "totalGames": 6, "dates": [
+  { "date": "2026-06-15", "games": [
+    { "gamePk": 800001, "gameType": "R", "season": "2026", "gameDate": "2026-06-15T23:05:00Z", "officialDate": "2026-06-15",
+      "status": { "abstractGameState": "Final", "codedGameState": "D", "detailedState": "Postponed", "statusCode": "DR", "reason": "Rain" },
+      "teams": { "away": { "team": { "id": 111, "name": "Boston Red Sox" } }, "home": { "team": { "id": 147, "name": "New York Yankees" } } },
+      "venue": { "id": 3313, "name": "Yankee Stadium", "location": { "defaultCoordinates": { "latitude": 40.8296, "longitude": -73.9262 } }, "fieldInfo": { "roofType": "Open" } },
+      "gameNumber": 1, "doubleHeader": "N" },
+    { "gamePk": 800003, "gameType": "R", "season": "2026", "gameDate": "2026-06-15T20:10:00Z", "officialDate": "2026-06-15",
+      "status": { "abstractGameState": "Final", "codedGameState": "F", "detailedState": "Final", "statusCode": "F" },
+      "teams": { "away": { "team": { "id": 133, "name": "Athletics" }, "score": 2, "isWinner": false }, "home": { "team": { "id": 111, "name": "Boston Red Sox" }, "score": 5, "isWinner": true } },
+      "venue": { "id": 3, "name": "Fenway Park" }, "gameNumber": 1 }
+  ]},
+  { "date": "2026-06-16", "games": [
+    { "gamePk": 800001, "gameType": "R", "season": "2026", "gameDate": "2026-06-16T17:05:00Z", "officialDate": "2026-06-16", "rescheduledFrom": "2026-06-15T23:05:00Z",
+      "status": { "abstractGameState": "Preview", "codedGameState": "S", "detailedState": "Scheduled", "statusCode": "S" },
+      "teams": { "away": { "team": { "id": 111, "name": "Boston Red Sox" }, "probablePitcher": { "id": 1, "fullName": "Pitcher Alpha" } }, "home": { "team": { "id": 147, "name": "New York Yankees" }, "probablePitcher": { "id": 2, "fullName": "Pitcher Beta" } } },
+      "venue": { "id": 3313, "name": "Yankee Stadium", "location": { "defaultCoordinates": { "latitude": 40.8296, "longitude": -73.9262 } }, "fieldInfo": { "roofType": "Open" } },
+      "gameNumber": 1, "doubleHeader": "S",
+      "lineups": { "homePlayers": [ { "id": 10, "fullName": "Hitter One", "primaryPosition": { "abbreviation": "CF" } }, { "id": 11, "fullName": "Hitter Two", "primaryPosition": { "abbreviation": "SS" } } ] } },
+    { "gamePk": 800002, "gameType": "R", "season": "2026", "gameDate": "2026-06-16T23:05:00Z", "officialDate": "2026-06-16",
+      "status": { "abstractGameState": "Preview", "codedGameState": "S", "detailedState": "Scheduled", "statusCode": "S" },
+      "teams": { "away": { "team": { "id": 111, "name": "Boston Red Sox" } }, "home": { "team": { "id": 147, "name": "New York Yankees" } } },
+      "venue": { "id": 3313, "name": "Yankee Stadium", "location": { "defaultCoordinates": { "latitude": 40.8296, "longitude": -73.9262 } }, "fieldInfo": { "roofType": "Open" } },
+      "gameNumber": 2, "doubleHeader": "S" },
+    { "gamePk": 800004, "gameType": "R", "season": "2026", "gameDate": "2026-06-16T02:10:00Z", "officialDate": "2026-06-15",
+      "status": { "abstractGameState": "Final", "codedGameState": "O", "detailedState": "Game Over", "statusCode": "O" },
+      "teams": { "away": { "team": { "id": 147, "name": "New York Yankees" }, "score": 3 }, "home": { "team": { "id": 133, "name": "Athletics" }, "score": 4 } },
+      "venue": { "id": 2529, "name": "Sutter Health Park" }, "gameNumber": 1 },
+    { "gamePk": 800005, "gameType": "R", "season": "2026", "gameDate": "2026-06-16T19:05:00Z", "officialDate": "2026-06-16",
+      "status": { "abstractGameState": "Live", "codedGameState": "T", "detailedState": "Suspended: Rain", "statusCode": "TR" },
+      "teams": { "away": { "team": { "id": 133, "name": "Athletics" }, "score": 1 }, "home": { "team": { "id": 111, "name": "Boston Red Sox" }, "score": 1 } },
+      "venue": { "id": 3, "name": "Fenway Park" }, "gameNumber": 1 },
+    { "gamePk": "not-a-number", "gameDate": "garbage" }
+  ]}
+]}

@@ -1,0 +1,50 @@
+[
+  {
+    "id": "e912304de2b2ce35b473ce2ecd3d1502",
+    "sport_key": "baseball_mlb",
+    "sport_title": "MLB",
+    "commence_time": "2026-06-16T23:05:00Z",
+    "home_team": "New York Yankees",
+    "away_team": "Boston Red Sox",
+    "bookmakers": [
+      {
+        "key": "draftkings",
+        "title": "DraftKings",
+        "last_update": "2026-06-16T14:58:12Z",
+        "markets": [
+          { "key": "h2h", "last_update": "2026-06-16T14:58:12Z", "outcomes": [ { "name": "Boston Red Sox", "price": 2.3 }, { "name": "New York Yankees", "price": 1.65 } ] },
+          { "key": "spreads", "last_update": "2026-06-16T14:58:12Z", "outcomes": [ { "name": "Boston Red Sox", "price": 1.8, "point": 1.5 }, { "name": "New York Yankees", "price": 2.05, "point": -1.5 } ] },
+          { "key": "totals", "last_update": "2026-06-16T14:58:12Z", "outcomes": [ { "name": "Over", "price": 1.91, "point": 8.5 }, { "name": "Under", "price": 1.91, "point": 8.5 } ] },
+          { "key": "h2h_lay", "last_update": "2026-06-16T14:58:12Z", "outcomes": [ { "name": "Boston Red Sox", "price": 2.4 }, { "name": "New York Yankees", "price": 1.7 } ] }
+        ]
+      },
+      {
+        "key": "fanduel",
+        "title": "FanDuel",
+        "last_update": "2026-06-16T14:55:40Z",
+        "markets": [
+          { "key": "h2h", "last_update": "2026-06-16T14:55:40Z", "outcomes": [ { "name": "Boston Red Sox", "price": 2.26 }, { "name": "New York Yankees", "price": 1.68 } ] },
+          { "key": "spreads", "last_update": "2026-06-16T14:55:40Z", "outcomes": [ { "name": "Boston Red Sox", "price": 1.6, "point": 2.5 }, { "name": "New York Yankees", "price": 2.35, "point": -2.5 } ] }
+        ]
+      },
+      {
+        "key": "badbook",
+        "title": "Malformed Book",
+        "last_update": "2026-06-16T14:50:00Z",
+        "markets": [
+          { "key": "h2h", "last_update": "2026-06-16T14:50:00Z", "outcomes": [ { "name": "Boston Red Sox", "price": 1.0 }, { "name": "New York Yankees", "price": -5 } ] }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "unmatched-event-1",
+    "sport_key": "baseball_mlb",
+    "sport_title": "MLB",
+    "commence_time": "2026-06-17T23:05:00Z",
+    "home_team": "Nonexistent Team",
+    "away_team": "Boston Red Sox",
+    "bookmakers": []
+  },
+  { "id": "broken", "sport_key": "baseball_mlb" }
+]

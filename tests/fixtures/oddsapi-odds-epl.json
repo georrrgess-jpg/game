@@ -1,0 +1,20 @@
+[
+  {
+    "id": "a1b2c3",
+    "sport_key": "soccer_epl",
+    "sport_title": "EPL",
+    "commence_time": "2026-08-22T14:00:00Z",
+    "home_team": "Arsenal",
+    "away_team": "Chelsea",
+    "bookmakers": [
+      {
+        "key": "williamhill",
+        "title": "William Hill",
+        "last_update": "2026-08-21T10:00:00Z",
+        "markets": [
+          { "key": "h2h", "last_update": "2026-08-21T10:00:00Z", "outcomes": [ { "name": "Arsenal", "price": 2.1 }, { "name": "Chelsea", "price": 3.6 }, { "name": "Draw", "price": 3.4 } ] }
+        ]
+      }
+    ]
+  }
+]

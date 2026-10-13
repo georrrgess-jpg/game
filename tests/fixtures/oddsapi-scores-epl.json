@@ -1,0 +1,3 @@
+[
+  { "id": "a1b2c3", "sport_key": "soccer_epl", "sport_title": "EPL", "commence_time": "2026-08-22T14:00:00Z", "completed": true, "home_team": "Arsenal", "away_team": "Chelsea", "scores": [ { "name": "Arsenal", "score": "1" }, { "name": "Chelsea", "score": "1" } ], "last_update": "2026-08-22T16:01:00Z" }
+]

@@ -1,0 +1,5 @@
+{ "copyright": "Copyright 2026 MLB Advanced Media, L.P.", "teams": [
+  { "id": 147, "name": "New York Yankees", "abbreviation": "NYY", "teamName": "Yankees", "shortName": "NY Yankees", "franchiseName": "New York", "clubName": "Yankees", "locationName": "Bronx", "active": true },
+  { "id": 111, "name": "Boston Red Sox", "abbreviation": "BOS", "teamName": "Red Sox", "shortName": "Boston", "franchiseName": "Boston", "clubName": "Red Sox", "locationName": "Boston", "active": true },
+  { "id": 133, "name": "Athletics", "abbreviation": "ATH", "teamName": "Athletics", "shortName": "Athletics", "franchiseName": "Athletics", "clubName": "Athletics", "locationName": "Sacramento", "active": true }
+] }
