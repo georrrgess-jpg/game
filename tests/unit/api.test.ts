@@ -283,8 +283,17 @@ describe("connected mode never substitutes demo data", () => {
     expect(empty.json.dataset).toBe("live");
     now = new Date("2026-06-16T15:00:00Z");
     await req("PUT", "/api/settings", { timezone: "America/New_York", providers: { mlb: { enabled: true, historySeasons: 1 } } });
-    const r = await req("POST", "/api/analyze-today", { dataset: "live", date: "2026-06-16" });
-    expect(r.status).toBe(200);
+    // Connected refreshes run as a background job: the request returns at once with a job to poll.
+    const started = await req("POST", "/api/analyze-today", { dataset: "live", date: "2026-06-16" });
+    expect(started.status).toBe(202);
+    // A second click while the first job is still running joins it instead of starting another refresh.
+    const again = await req("POST", "/api/analyze-today", { dataset: "live", date: "2026-06-16" });
+    const firstState = (await req("GET", `/api/analyze-today/jobs/${started.json.job.id}`)).json.job;
+    if (!firstState.finishedAt || firstState.finishedAt > again.json.job.startedAt) expect(again.json.job.id).toBe(started.json.job.id);
+    await waitForJob(again.json.job.id);
+    const r = { json: await waitForJob(started.json.job.id) };
+    expect(r.json.refresh.every((s: any) => typeof s.ms === "number")).toBe(true);
+    expect(r.json.findings.games).toBe(r.json.board.items.length);
     expect(r.json.refresh.find((s: any) => s.step === "MLB schedule").ok).toBe(true);
     expect(r.json.refresh.find((s: any) => s.step.startsWith("Odds")).skipped).toBe(true); // disabled / no key: skipped, never faked
     const items = r.json.board.items;
@@ -296,9 +305,24 @@ describe("connected mode never substitutes demo data", () => {
     const providers = await req("GET", "/api/providers");
     expect(providers.json.providers.find((p: any) => p.id === "oddsapi").health.state).toBe("not_configured");
     expect(providers.json.providers.find((p: any) => p.id === "mlb").verification).toMatch(/Live connection succeeded/);
+    // A second analysis the same day reuses the history instead of importing it again.
+    const second = await req("POST", "/api/analyze-today", { dataset: "live", date: "2026-06-16" });
+    const r2 = await waitForJob(second.json.job.id);
+    expect(r2.refresh.find((s: any) => s.step === "MLB history").detail).toMatch(/reused/);
+    expect((await req("GET", "/api/analyze-today/jobs/nope")).status).toBe(404);
     now = new Date("2026-10-13T12:00:00Z");
   });
 });
+
+async function waitForJob(id: string): Promise<any> {
+  for (let i = 0; i < 600; i++) {
+    const j = await req("GET", `/api/analyze-today/jobs/${id}`);
+    if (j.json.job.state === "done") return j.json.job.result;
+    if (j.json.job.state === "failed") throw new Error(j.json.job.error);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error("analysis job did not finish");
+}
 
 describe("scheduler", () => {
   it("computes the next daily run in local time across DST", () => {

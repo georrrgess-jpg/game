@@ -14,6 +14,7 @@ import { ActivityLog } from "./activity";
 import { HttpClient, type Transport } from "./http";
 import { ModelService, analyzeEvent, type AnalysisContext, type GameAnalysis } from "./analysis";
 import { buildBoard, boardCsv, summarize } from "./board";
+import type { StepResult } from "./ingest";
 import { Backtester, averageLines, valueFinder } from "./value";
 import { BALLDONTLIE_CAPABILITIES, NFLVERSE_CAPABILITIES, importResultsCsv } from "./providers/results";
 import { sportFamily } from "../shared/contracts";
@@ -476,24 +477,93 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
     return sendCsv(reply, `board-${ctx.dataset}-${date}.csv`, boardCsv(board.items));
   });
 
-  app.post("/api/analyze-today", async (req) => {
-    const body = z.object({ dataset: datasetSchema, date: z.string().optional(), asOf: isoInstant.optional(), refresh: z.boolean().default(true) }).parse(req.body ?? {});
-    const ctx0 = ctxFrom({ dataset: body.dataset, asOf: body.asOf });
-    const date = localDateParam({ date: body.date }, ctx0.dataset, ctx0.asOf);
-    let steps: Awaited<ReturnType<LiveIngest["refreshDay"]>> = [];
-    if (ctx0.dataset === "live" && ctx0.mode !== "replay" && body.refresh) {
-      steps = await ingest.refreshDay(date);
-    }
-    const ctx = ctx0.mode === "replay" ? ctx0 : ctxFrom({ dataset: body.dataset }); // re-read the clock after refreshing
-    const board = buildBoard(analysisDeps, ctx, date);
+  // ---- Analyze Today -------------------------------------------------------------------------
+  // With connected providers the refresh can take a while (several providers, rate limits), so it runs
+  // as a background job: the browser gets a job id at once and polls for progress and the findings.
+  interface AnalyzeJob {
+    id: string;
+    dataset: Dataset;
+    date: string;
+    startedAt: string;
+    finishedAt: string | null;
+    state: "refreshing" | "analyzing" | "done" | "failed";
+    current: { step: string; provider: string; startedAt: string; startedMs: number } | null;
+    steps: StepResult[];
+    result: ReturnType<typeof analyzeResult> | null;
+    error: string | null;
+  }
+  const jobs = new Map<string, AnalyzeJob>();
+
+  /** Board, snapshot and a short summary of what the analysis found. */
+  function analyzeResult(ctx: AnalysisContext, date: string, steps: StepResult[]) {
+    const board = cachedBoard(ctx, date);
     let snapshot = null;
-    if (ctx.mode !== "replay") {
-      snapshot = classroom.recordSystemSnapshot(ctx.dataset, board.analyses, toUtcIso(now()), randomUUID());
-    }
+    if (ctx.mode !== "replay") snapshot = classroom.recordSystemSnapshot(ctx.dataset, board.analyses, toUtcIso(now()), randomUUID());
+    const v = valueFinder(board.analyses);
+    const findings = {
+      games: board.items.length,
+      upcoming: board.items.filter((i) => !i.started && !i.voided).length,
+      withCurrentMarket: board.coverage.withCurrentMarket,
+      withModel: board.coverage.withModel,
+      researchLeads: board.coverage.researchLeads,
+      priceDiscrepancies: v.discrepancies.length,
+      arbitrage: v.arbitrage.length,
+      mostLikely: v.mostLikely.slice(0, 3).map((c) => ({ selection: c.selection, matchup: c.matchup, probability: c.probability, eventId: c.eventId })),
+      failedSteps: steps.filter((x) => !x.ok && !x.skipped).length,
+    };
     log.add("info", "analyze", `Analyze Today (${ctx.dataset}, ${date}): ${board.items.length} games, ${board.coverage.withCurrentMarket} with current quotes, ${board.coverage.withModel} with model.`);
     const { analyses, ...rest } = board;
     void analyses;
-    return { board: rest, refresh: steps, snapshot };
+    return { board: rest, refresh: steps, snapshot, findings };
+  }
+
+  app.post("/api/analyze-today", async (req, reply) => {
+    const body = z.object({ dataset: datasetSchema, date: z.string().optional(), asOf: isoInstant.optional(), refresh: z.boolean().default(true) }).parse(req.body ?? {});
+    const ctx0 = ctxFrom({ dataset: body.dataset, asOf: body.asOf });
+    const date = localDateParam({ date: body.date }, ctx0.dataset, ctx0.asOf);
+    if (!(ctx0.dataset === "live" && ctx0.mode !== "replay" && body.refresh)) {
+      // Demo and replay: nothing to fetch, answer directly.
+      return analyzeResult(ctx0, date, []);
+    }
+    const running = [...jobs.values()].find((j) => j.dataset === "live" && j.date === date && (j.state === "refreshing" || j.state === "analyzing"));
+    if (running) return reply.code(202).send({ job: running });
+    const job: AnalyzeJob = { id: randomUUID(), dataset: "live", date, startedAt: toUtcIso(now()), finishedAt: null, state: "refreshing", current: null, steps: [], result: null, error: null };
+    jobs.set(job.id, job);
+    for (const old of [...jobs.values()].filter((j) => j.finishedAt).slice(0, -5)) jobs.delete(old.id);
+    void (async () => {
+      try {
+        const steps = await ingest.refreshDay(date, {}, (e) => {
+          if (e.type === "start") job.current = { step: e.step, provider: e.provider, startedAt: toUtcIso(now()), startedMs: Date.now() };
+          else {
+            job.steps.push(e.result);
+            job.current = null;
+          }
+        });
+        job.steps = steps;
+        job.current = null;
+        job.state = "analyzing";
+        // Building the board is CPU work that briefly keeps the server busy; give the page one poll to
+        // show "Analysing every game" first, so it never looks frozen.
+        await new Promise((r) => setTimeout(r, 1200));
+        job.result = analyzeResult(ctxFrom({ dataset: "live" }), date, steps); // re-read the clock after refreshing
+        job.state = "done";
+      } catch (e) {
+        job.state = "failed";
+        job.error = (e as Error).message;
+        log.add("error", "analyze", `Analyze Today failed: ${job.error}`);
+      } finally {
+        job.finishedAt = toUtcIso(now());
+      }
+    })();
+    return reply.code(202).send({ job });
+  });
+
+  app.get("/api/analyze-today/jobs/:id", async (req) => {
+    const job = jobs.get((req.params as { id: string }).id);
+    if (!job) throw new HttpProblem(404, "This analysis is no longer available. Press Analyze Today again.");
+    // Durations are measured on the server, so they are right even if the browser's clock differs.
+    const runningSeconds = job.current ? Math.round((Date.now() - job.current.startedMs) / 1000) : null;
+    return { job: { ...job, current: job.current ? { ...job.current, runningSeconds } : null }, background: ingest.backgroundStatus() };
   });
 
   app.get("/api/events", async (req) => {

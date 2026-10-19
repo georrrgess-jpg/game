@@ -269,3 +269,23 @@ describe("review regressions", () => {
     expect(m.homeProbAt(id)).toBeGreaterThan(0.9);
   });
 });
+
+describe("cache invalidation is targeted", () => {
+  it("live prices for upcoming games keep fitted models; quotes for finished games refresh them", async () => {
+    const { MarketService } = await import("../../server/market");
+    const a = makeDeps();
+    const m = new MarketService(a.repo, () => 150);
+    importResultsCsv(a.repo, "basketball_nba", "date,time,home,away,home_score,away_score\n2025-01-05,19:30,Alpha,Beta,101,99\n2025-01-09,19:30,Alpha,Beta,,\n", "generic", "2025-01-06T00:00:00Z");
+    const v0 = m.pastVersion();
+    const quote = (eventId: string, outcome: "home" | "away", price: number, t: string) => ({
+      dataset: "live" as const, event_id: eventId, provider: "t", book_key: "b", book_title: "B", contract: "moneyline_2way_full_game" as const,
+      contract_id: "moneyline_2way_full_game", provider_market: "h2h", line: null, outcome, price_decimal: price, source_time: t, retrieved_at: t, known_at: t,
+    });
+    const upcoming = a.repo.db.get<{ id: string }>("SELECT id FROM events WHERE status = 'scheduled'")!.id;
+    const final = a.repo.db.get<{ id: string }>("SELECT id FROM events WHERE status = 'final'")!.id;
+    a.repo.insertQuotes([quote(upcoming, "home", 1.9, "2025-01-08T12:00:00Z"), quote(upcoming, "away", 1.9, "2025-01-08T12:00:00Z")]);
+    expect(m.pastVersion()).toBe(v0);
+    a.repo.insertQuotes([quote(final, "home", 1.5, "2025-01-05T18:30:00Z"), quote(final, "away", 2.6, "2025-01-05T18:30:00Z")]);
+    expect(m.pastVersion()).toBe(v0 + 1);
+  });
+});

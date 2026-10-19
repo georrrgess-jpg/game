@@ -61,7 +61,7 @@ frozen information time) or **CONNECTED DATA**. Switch between Demo and Connecte
 
 | Area | What it is for |
 |---|---|
-| **Today** | **Analyze Today** refreshes connected providers within your caps (demo: recomputes as of the demo clock), records the day's estimates, and shows three separate views: *Most likely outcomes*, *Highest quoted price* for a chosen outcome, and *Model vs market*. Filters cover sport, league, start time, market, quote freshness and data completeness. Every game shows its as-of time, coverage, probability, evidence summary and an uncertainty statement. CSV export and print are available. |
+| **Today** | **Analyze Today** refreshes connected providers within your caps (demo: recomputes as of the demo clock), shows each provider step live with its duration, then a **"What the analysis found"** summary (games, prices, price discrepancies, research leads, most likely outcomes), records the day's estimates, and shows three separate views: *Most likely outcomes*, *Highest quoted price* for a chosen outcome, and *Model vs market*. Filters cover sport, league, start time, market, quote freshness and data completeness. Every game shows its as-of time, coverage, probability, evidence summary and an uncertainty statement. CSV export and print are available. |
 | **Value Finder** | Today's outcomes ranked by **estimated chance of winning** (with the best price and its break-even chance next to it), and, separately, **price discrepancies**: prices that beat the margin-free consensus of at least 3 books by 1% or more (grade B), model edges only where the model has beaten the market out of sample (grade C), **arbitrage** sets (grade A) and clearly labelled *unproven model ideas* (grade D). A **track record** tab backtests each rule on this season's finished games with 95% intervals and closing line value. No quotas, no "locks": an empty list is a normal answer. |
 | **Average Lines** | For every game: the average moneyline, spread and total across books (averaged correctly, on the probability scale), the best and worst price with the book, the margin-free fair price, the average spread/total line and the range of lines offered, and the average bookmaker margin. |
 | **Games** | Search by team and open the **game workspace**: raw implied, margin-adjusted market, independent model (with an approximate 80% range), combined estimate, per-book quote table, **spreads and totals** priced from the model's margin and total distributions (with push chances on whole-number lines and a sharpened model + market estimate), quote history chart (with a table view), injuries, lineups, conflicts, source-linked news, weather, a five-question plain-language explanation with source IDs, and **what-if** controls kept visibly separate from confirmed facts. |
@@ -131,7 +131,9 @@ and the sports and books actually observed on your installation.
   redacted from logs). Enable it in Settings and press **Import history now**. The free tier allows
   about 5 requests a minute, so a season (about 15 pages) takes a few minutes; the app spaces requests
   automatically (set your plan's limit in Settings).
-- The daily refresh also fetches the schedule and results around today.
+- The daily refresh also fetches the schedule and results around today. Season history never blocks
+  Analyze Today: if it is missing it starts in the background (at most once a day) and the NBA model
+  appears once it has finished.
 
 ### Results files (CSV import, no network)
 **Settings → Import results (CSV)** accepts files you downloaded yourself (up to 19 MB):
@@ -361,7 +363,7 @@ Claude Code session is not a background worker for this app.
 
 ## 9. What was tested, and what needs live credentials
 
-`npm test`: **150 tests** across 10 files, all passing in the build environment. Covers:
+`npm test`: **151 tests** across 10 files, all passing in the build environment. Covers:
 - odds math (positive and negative American odds, ±100, round-trips, malformed and zero quotes,
   3-way margin, EV with and without pushes, half-up rounding), the four margin-removal methods,
   fractional odds, Kelly, arbitrage stake splits, parlays, hedging and closing line value,

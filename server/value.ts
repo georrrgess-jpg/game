@@ -373,7 +373,7 @@ export class Backtester {
       seasons[sport] = season;
       finals.push(...all.filter((g) => (g.season ?? seasonOf(sport, g.start_time)) === season));
     }
-    const key = `${dataset}|${asOf}|${finals.length}|${finals.map((f) => f.id).slice(-1)[0] ?? ""}|${markets.version()}`;
+    const key = `${dataset}|${asOf}|${finals.length}|${finals.map((f) => f.id).slice(-1)[0] ?? ""}|${markets.pastVersion()}`;
     const hit = this.cache.get(key);
     if (hit) return hit as ReturnType<Backtester["compute"]>;
     const r = this.compute(finals, seasons, markets);

@@ -255,7 +255,9 @@ export class MarketService {
     private staleMinutes: () => number,
   ) {}
 
-  private seenVersion = "";
+  private lastQuoteId = -1;
+  private lastEventRow = -1;
+  private pastData = 0;
 
   /** Changes whenever quotes or events are added (imports, refreshes); cheap (rowid look-ups). */
   version(): string {
@@ -263,14 +265,40 @@ export class MarketService {
     return `${v.q ?? 0}|${v.e ?? 0}`;
   }
 
-  /** Drop every cache when new data has arrived, so imports take effect without a restart. */
+  /**
+   * Changes only when quotes arrive for games that are already final (imports of history, closing
+   * lines). Fitted models and backtests depend on those, not on today's live prices, so routine odds
+   * refreshes no longer force every model to be refitted.
+   */
+  pastVersion(): number {
+    this.sync();
+    return this.pastData;
+  }
+
+  /** Drop exactly the cached results that new data can change, so imports take effect without a restart. */
   private sync(): void {
-    const v = this.version();
-    if (v === this.seenVersion) return;
-    this.seenVersion = v;
-    this.snapshots.clear();
-    this.configs.clear();
-    this.seasonCache.clear();
+    const v = this.repo.db.get<{ q: number | null; e: number | null }>("SELECT (SELECT MAX(id) FROM quotes) q, (SELECT MAX(rowid) FROM events) e")!;
+    const q = v.q ?? 0;
+    const e = v.e ?? 0;
+    if (q === this.lastQuoteId && e === this.lastEventRow) return;
+    if (this.lastQuoteId >= 0) {
+      // New events (schedules, imports) can change which seasons are complete.
+      if (e !== this.lastEventRow) this.seasonCache.clear();
+      if (q !== this.lastQuoteId) {
+        const changed = this.repo.db.all<{ id: string; status: string | null }>(
+          "SELECT DISTINCT q.event_id AS id, e.status AS status FROM quotes q LEFT JOIN events e ON e.id = q.event_id WHERE q.id > ?",
+          [this.lastQuoteId],
+        );
+        const ids = new Set(changed.map((r) => r.id));
+        for (const k of [...this.snapshots.keys()]) if (ids.has(k.slice(0, k.lastIndexOf("|")))) this.snapshots.delete(k);
+        if (changed.some((r) => r.status === "final")) {
+          this.configs.clear();
+          this.pastData++;
+        }
+      }
+    }
+    this.lastQuoteId = q;
+    this.lastEventRow = e;
   }
 
   /** Quotes known `minutesBefore` the scheduled start (cached until new data arrives). */

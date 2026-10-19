@@ -156,6 +156,37 @@ export interface StepResult {
   ok: boolean;
   skipped: boolean;
   detail: string;
+  ms?: number;
+}
+
+export interface AnalyzeFindings {
+  games: number;
+  upcoming: number;
+  withCurrentMarket: number;
+  withModel: number;
+  researchLeads: number;
+  priceDiscrepancies: number;
+  arbitrage: number;
+  mostLikely: { selection: string; matchup: string; probability: number; eventId: string }[];
+  failedSteps: number;
+}
+
+export interface AnalyzeResult {
+  board: Board;
+  refresh: StepResult[];
+  snapshot: { recorded: number; abstentions: number; skipped: number } | null;
+  findings: AnalyzeFindings;
+}
+
+export interface AnalyzeJob {
+  id: string;
+  state: "refreshing" | "analyzing" | "done" | "failed";
+  startedAt: string;
+  finishedAt: string | null;
+  current: { step: string; provider: string; startedAt: string; runningSeconds?: number | null } | null;
+  steps: StepResult[];
+  result: AnalyzeResult | null;
+  error: string | null;
 }
 
 export interface BookQuoteView {

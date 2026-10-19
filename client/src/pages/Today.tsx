@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, qs, type Board, type BoardItem, type Outcome, type StepResult } from "../api";
+import { api, qs, type AnalyzeFindings, type AnalyzeJob, type AnalyzeResult, type Board, type BoardItem, type Outcome, type StepResult } from "../api";
 import { useApi, useApp } from "../state";
 import { ago, fmtDate, fmtTime, formatAmerican, formatDecimal, formatPct, formatPctPoints, localDate, outcomeLabel, shiftDate, sportLabel, statusLabel, atWord } from "../format";
 import { Callout, CompletenessMeter, Empty, ErrorBox, FictionalNote, Loading, ProbBar, Stat, Tabs, VerdictChip } from "../components/ui";
@@ -37,19 +37,38 @@ export function TodayPage() {
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<StepResult[] | null>(null);
   const [snapshotNote, setSnapshotNote] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ job: AnalyzeJob; startedAt: number } | null>(null);
+  const [findings, setFindings] = useState<AnalyzeFindings | null>(null);
   const url = `/api/board${qs({ dataset, asOf: asOfParam, date: day })}`;
   const { data: board, error, loading, reload } = useApi<Board>(url);
 
   const analyze = async () => {
     setRunning(true);
     setSteps(null);
+    setFindings(null);
+    setProgress(null);
     try {
-      const r = await api.post<{ board: Board; refresh: StepResult[]; snapshot: { recorded: number; abstentions: number; skipped: number } | null }>("/api/analyze-today", {
+      const first = await api.post<AnalyzeResult | { job: AnalyzeJob }>("/api/analyze-today", {
         dataset,
         date: day,
         asOf: asOfParam,
       });
+      let r: AnalyzeResult;
+      if ("job" in first) {
+        // Connected providers: follow the background job, showing each step as it finishes.
+        const t0 = Date.now();
+        let job = first.job;
+        while (job.state === "refreshing" || job.state === "analyzing") {
+          setProgress({ job, startedAt: t0 });
+          await new Promise((res) => setTimeout(res, 1000));
+          job = (await api.get<{ job: AnalyzeJob }>(`/api/analyze-today/jobs/${job.id}`)).job;
+        }
+        setProgress(null);
+        if (job.state === "failed" || !job.result) throw new Error(job.error ?? "The analysis did not finish.");
+        r = job.result;
+      } else r = first;
       setSteps(r.refresh);
+      setFindings(r.findings);
       setSnapshotNote(
         r.snapshot
           ? `Recorded ${r.snapshot.recorded} system forecast(s) and ${r.snapshot.abstentions} abstention(s) with immutable timestamps (${r.snapshot.skipped} skipped: started, void, or already recorded this hour).`
@@ -60,6 +79,7 @@ export function TodayPage() {
     } catch (e) {
       toast((e as Error).message, "error");
     } finally {
+      setProgress(null);
       setRunning(false);
     }
   };
@@ -134,6 +154,9 @@ export function TodayPage() {
         </button>
       </div>
 
+      {progress && <AnalyzeProgress job={progress.job} startedAt={progress.startedAt} />}
+      {findings && <FindingsSummary f={findings} dataset={dataset} />}
+
       {steps && steps.length > 0 && (
         <div className="card card-tight" aria-live="polite">
           <h2 style={{ fontSize: "1rem" }}>Refresh results</h2>
@@ -143,6 +166,7 @@ export function TodayPage() {
                 <span className={`chip ${s.ok ? "chip-good" : s.skipped ? "chip-muted" : "chip-danger"}`}>{s.ok ? "OK" : s.skipped ? "Skipped" : "Failed"}</span>
                 <span>
                   <strong>{s.step}</strong> <span className="text-2">{s.detail}</span>
+                  {s.ms != null && s.ms >= 1000 && <span className="subtle"> · {(s.ms / 1000).toFixed(1)} s</span>}
                 </span>
               </li>
             ))}
@@ -579,6 +603,87 @@ function GapView({ items }: { items: BoardItem[] }) {
             ))}
           </ul>
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Live view of a connected refresh: finished steps, the one running now and the elapsed time. */
+function AnalyzeProgress({ job, startedAt }: { job: AnalyzeJob; startedAt: number }) {
+  // Tick every second on its own, so the timer keeps moving even while the server is busy computing.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const elapsed = Math.round((Date.now() - startedAt) / 1000);
+  const runningFor = Math.max(0, job.current?.runningSeconds ?? 0);
+  return (
+    <div className="card card-tight" role="status" aria-live="polite">
+      <h2 style={{ fontSize: "1rem" }}>
+        {job.state === "analyzing" ? "Analysing every game…" : "Refreshing connected sources…"} <span className="subtle small">{elapsed} s</span>
+      </h2>
+      <ul className="list-plain small">
+        {job.steps.map((s, i) => (
+          <li key={i}>
+            <span className={`chip ${s.ok ? "chip-good" : s.skipped ? "chip-muted" : "chip-danger"}`}>{s.ok ? "OK" : s.skipped ? "Skipped" : "Failed"}</span> {s.step}
+            {s.ms != null && s.ms >= 1000 && <span className="subtle"> · {(s.ms / 1000).toFixed(1)} s</span>}
+          </li>
+        ))}
+        {job.current && (
+          <li>
+            <IconRefresh className="spin" style={{ width: 14, height: 14, verticalAlign: "-2px" }} /> <strong>{job.current.step}</strong>
+            <span className="subtle"> · {runningFor} s</span>
+            {runningFor > 20 && <span className="text-2"> (a slow or unreachable provider; it gives up after its time limit and the rest continue)</span>}
+          </li>
+        )}
+        {job.state === "analyzing" && (
+          <li>
+            <IconRefresh className="spin" style={{ width: 14, height: 14, verticalAlign: "-2px" }} /> <strong>Computing estimates</strong>
+            <span className="subtle"> (the first run of the day also fits the models, which can take a little longer)</span>
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
+/** What the analysis found, in one place, with links to the views that explain it. */
+function FindingsSummary({ f, dataset }: { f: AnalyzeFindings; dataset: string }) {
+  return (
+    <div className="card card-tight" role="status" aria-live="polite">
+      <h2 style={{ fontSize: "1rem" }}>What the analysis found</h2>
+      {f.games === 0 ? (
+        <p className="small text-2">
+          No games for this day in the {dataset === "live" ? "connected" : "demo"} data. {dataset === "live" ? "Check the refresh results below: a source may be switched off, out of season, or missing a key." : ""}
+        </p>
+      ) : (
+        <>
+          <ul className="list-bullets small">
+            <li>
+              {f.games} game(s), {f.upcoming} not yet started; {f.withCurrentMarket} with current prices, {f.withModel} with a model estimate.
+            </li>
+            <li>
+              {f.priceDiscrepancies} price(s) beat the consensus of other books and {f.arbitrage} arbitrage set(s): <Link to="/value">open the Value Finder</Link>.
+            </li>
+            <li>
+              {f.researchLeads} model–market research lead(s).{" "}
+              {f.researchLeads === 0 ? "That is the usual result: the model has to beat the market out of sample first." : ""}
+            </li>
+            {f.mostLikely.length > 0 && (
+              <li>
+                Most likely: {f.mostLikely.map((m, i) => (
+                  <span key={i}>
+                    {i > 0 && "; "}
+                    <Link to={`/games/${encodeURIComponent(m.eventId)}`}>{m.selection}</Link> {formatPct(m.probability)}
+                  </span>
+                ))}
+                .
+              </li>
+            )}
+            {f.failedSteps > 0 && <li>{f.failedSteps} source(s) failed this time; see the refresh results below.</li>}
+          </ul>
+        </>
       )}
     </div>
   );
