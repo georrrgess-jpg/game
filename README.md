@@ -35,6 +35,10 @@ forecasts are kept.
 | `npm run test:e2e` | Build, then run end-to-end tests in Chromium (desktop and mobile) |
 | `npm run typecheck` | TypeScript check of server, client and tests |
 
+**If `npm start` says `'vite' is not recognized`** (or the app says its dependencies are not
+installed), run `npm install` once in the project folder first. On Windows, keep the folder outside
+OneDrive (for example `C:\OverroundLab`): syncing can lock the database and `node_modules`.
+
 Configuration lives in `.env` (copy `.env.example`). Stop the app with **Ctrl+C**. To start from
 scratch, stop the app and delete the `data/` folder. With connected providers the database grows
 with each odds refresh; at default settings that is very roughly 1–3 MB per active day, bounded by

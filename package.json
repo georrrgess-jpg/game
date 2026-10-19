@@ -9,8 +9,11 @@
   },
   "scripts": {
     "start": "npm run build && node --disable-warning=ExperimentalWarning build/server.mjs",
+    "preserve": "node scripts/check-setup.mjs",
     "serve": "node --disable-warning=ExperimentalWarning build/server.mjs",
+    "prebuild": "node scripts/check-setup.mjs",
     "build": "vite build && node scripts/build-server.mjs",
+    "predev": "node scripts/check-setup.mjs",
     "dev": "node scripts/dev.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
