@@ -6,7 +6,7 @@ import { z, ZodError } from "zod";
 import { DateTime } from "luxon";
 
 import type { ServerConfig } from "./config";
-import { isLoopbackHost, redact } from "./config";
+import { envFileStatus, isLoopbackHost, redact } from "./config";
 import { Db } from "./db";
 import { Repo, type Dataset, type EventRecord } from "./repo";
 import { SettingsStore, DEMO_START } from "./settings";
@@ -302,6 +302,13 @@ export async function buildApp(opts: AppOptions): Promise<AppContext> {
   app.get("/api/settings", async () => ({
     settings: settings.get(),
     secrets: { oddsApiKey: !!cfg.oddsApiKey, anthropicApiKey: !!cfg.anthropicApiKey, balldontlieApiKey: !!cfg.balldontlieApiKey, instructorPin: !!cfg.instructorPin },
+    // Where the server looked for .env and what went wrong (setting names only, never values). The folder
+    // path is shown only to someone on this computer.
+    envFile: (() => {
+      const e = envFileStatus();
+      if (!e) return null;
+      return { path: cfg.allowRemote ? ".env" : e.path, found: e.found, keys: e.keys, hints: e.hints };
+    })(),
   }));
 
   app.put("/api/settings", async (req) => {

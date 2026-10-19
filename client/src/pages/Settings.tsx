@@ -9,7 +9,8 @@ type STab = "providers" | "scheduler" | "general" | "appearance";
 
 interface SettingsResp {
   settings: any;
-  secrets: { oddsApiKey: boolean; anthropicApiKey: boolean; instructorPin: boolean };
+  secrets: { oddsApiKey: boolean; anthropicApiKey: boolean; balldontlieApiKey?: boolean; instructorPin: boolean };
+  envFile?: { path: string; found: boolean; keys: string[]; hints: string[] } | null;
 }
 
 interface Provider {
@@ -120,6 +121,7 @@ function ProvidersPanel({ s, reload }: { s: SettingsResp; reload: () => void }) 
       <Callout kind="info" title="What works without keys.">
         The demo world, Classroom Lab, Model Report, Knowledge Center and all calculators work offline. With no key at all you can also enable the MLB Stats API (schedules, results, probable pitchers, lineups, injured lists), nflverse (NFL schedules, results and closing lines), Open-Meteo (weather) and RSS news, and import tennis results files below. NBA history needs a free balldontlie key (BALLDONTLIE_API_KEY). Market quotes need The Odds API key (ODDS_API_KEY in .env). The optional AI explanation needs ANTHROPIC_API_KEY.
       </Callout>
+      <EnvFileCard s={s} />
       <Callout kind="warn" title="Coverage is never 'all sportsbooks'.">
         Best prices are always "highest among connected sources". The books, sports and markets actually seen on this installation are listed under each provider after a refresh.
       </Callout>
@@ -346,6 +348,40 @@ function OddsApiConfig({ cfg, save }: { cfg: any; save: (p: unknown, m?: string)
         </p>
       </div>
     </details>
+  );
+}
+
+/** Shows where the server looked for .env and why a key may not be picked up. Never shows values. */
+function EnvFileCard({ s }: { s: SettingsResp }) {
+  const e = s.envFile;
+  if (!e) return null;
+  const keys: [string, boolean | undefined][] = [
+    ["ODDS_API_KEY", s.secrets.oddsApiKey],
+    ["BALLDONTLIE_API_KEY", s.secrets.balldontlieApiKey],
+    ["ANTHROPIC_API_KEY", s.secrets.anthropicApiKey],
+  ];
+  const problems = e.hints.length > 0 || !e.found;
+  return (
+    <Callout kind={problems ? "warn" : "info"} title={e.found ? "Server settings file found." : "Server settings file not found."}>
+      <span className="small">
+        The server read <code>{e.path}</code>
+        {e.found ? ` (${e.keys.length} setting${e.keys.length === 1 ? "" : "s"}: ${e.keys.join(", ") || "none"})` : ""}. Keys:{" "}
+        {keys.map(([k, ok], i) => (
+          <span key={k}>
+            {i > 0 && ", "}
+            <code>{k}</code> {ok ? "configured" : "not set"}
+          </span>
+        ))}
+        . After editing <code>.env</code>, stop the app (Ctrl+C in its window) and start it again: the file is read only at start-up.
+      </span>
+      {e.hints.length > 0 && (
+        <ul className="list-bullets small" style={{ marginTop: 6 }}>
+          {e.hints.map((h) => (
+            <li key={h}>{h}</li>
+          ))}
+        </ul>
+      )}
+    </Callout>
   );
 }
 

@@ -1,4 +1,4 @@
-import { loadConfig, isLoopbackHost } from "./config";
+import { loadConfig, isLoopbackHost, envFileStatus } from "./config";
 import { buildApp } from "./app";
 
 function checkNode(): void {
@@ -38,7 +38,11 @@ async function main(): Promise<void> {
   console.log(`  Open ${url}`);
   console.log(`  Data folder: ${config.dataDir}`);
   console.log(`  Scheduler: ${s.scheduler.paused ? "paused" : "running"} — scheduled scans run only while this window stays open.`);
+  const env = envFileStatus();
+  console.log(`  Settings file: ${env?.path ?? ".env"} (${env?.found ? `found, ${env.keys.length} setting(s)` : "not found"})`);
   console.log(`  Odds API key: ${config.oddsApiKey ? "configured" : "not set (demo and keyless providers still work)"}`);
+  console.log(`  balldontlie key: ${config.balldontlieApiKey ? "configured" : "not set"}`);
+  for (const h of env?.hints ?? []) console.log(`  ! ${h}`);
   console.log("  Press Ctrl+C to stop.");
   console.log("");
   // Fit the models in the background right away so the first page load does not wait for them.

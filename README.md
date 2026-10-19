@@ -39,6 +39,13 @@ forecasts are kept.
 installed), run `npm install` once in the project folder first. On Windows, keep the folder outside
 OneDrive (for example `C:\OverroundLab`): syncing can lock the database and `node_modules`.
 
+**If a key shows "not set" although it is in `.env`:** Settings → Providers shows the exact file the
+server read, which settings it found (names only) and what looks wrong: a file actually named
+`.env.txt` (Windows hides extensions), a key typed into `.env.example`, a `.env` in the wrong
+folder, a misspelt name or a placeholder value. The file is read only when the app starts, so restart
+after editing it. Files saved by Notepad (with a byte-order mark) or by PowerShell (`echo ... > .env`,
+UTF-16) are read correctly.
+
 Configuration lives in `.env` (copy `.env.example`). Stop the app with **Ctrl+C**. To start from
 scratch, stop the app and delete the `data/` folder. With connected providers the database grows
 with each odds refresh; at default settings that is very roughly 1–3 MB per active day, bounded by
@@ -354,7 +361,7 @@ Claude Code session is not a background worker for this app.
 
 ## 9. What was tested, and what needs live credentials
 
-`npm test`: **145 tests** across 9 files, all passing in the build environment. Covers:
+`npm test`: **150 tests** across 10 files, all passing in the build environment. Covers:
 - odds math (positive and negative American odds, ±100, round-trips, malformed and zero quotes,
   3-way margin, EV with and without pushes, half-up rounding), the four margin-removal methods,
   fractional odds, Kelly, arbitrage stake splits, parlays, hedging and closing line value,
